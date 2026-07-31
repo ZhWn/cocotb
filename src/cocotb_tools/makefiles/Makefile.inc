@@ -92,32 +92,8 @@ endif
 
 endif
 
-define find_libpython_errmsg =
-
-
-find_libpython was not able to find a libpython in the current Python environment. Ensure
-the Python development packages are installed. If they are installed and find_libpython
-is not finding the path to libpython, file an upstream bug in find_libpython; then
-manually override the LIBPYTHON_LOC make variable with the absolute path to libpython.so
-(or python.dll on Windows).
-
-endef
-
 ifndef GPI_USERS
-ifndef LIBPYTHON_LOC
-
-# get the path to libpython and the return code from the script
-# adapted from https://stackoverflow.com/a/24658961/6614127
-FIND_LIBPYTHON_RES := $(shell $(PYTHON_BIN) -m cocotb_tools.config --libpython; echo $$?)
-FIND_LIBPYTHON_RC := $(lastword $(FIND_LIBPYTHON_RES))
-LIBPYTHON_LOC := $(strip $(subst $(FIND_LIBPYTHON_RC)QQQQ,,$(FIND_LIBPYTHON_RES)QQQQ))
-
-# complain if libpython isn't found
-ifneq ($(FIND_LIBPYTHON_RC),0)
-    $(error $(find_libpython_errmsg))
-endif
-endif
-GPI_USERS := $(LIBPYTHON_LOC);$(shell $(PYTHON_BIN) -m cocotb_tools.config --pygpi-entry-point)
+GPI_USERS := $(shell $(PYTHON_BIN) -m cocotb_tools.config --pygpi-entry-point)
 endif
 export GPI_USERS
 

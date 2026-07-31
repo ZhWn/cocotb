@@ -158,14 +158,6 @@ Make Variables
     Set to the result of ``cocotb-config --python-bin`` if ``cocotb-config`` is present on the ``PATH``.
     Otherwise defaults to ``python3``.
 
-.. make:var:: LIBPYTHON_LOC
-
-    The absolute path to the Python library associated with the current Python installation;
-    i.e. ``libpython.so`` or ``python.dll`` on Windows.
-    This is determined with ``cocotb-config --libpython`` during build.
-
-    This is only used if :envvar:`GPI_USERS` is not already defined by the user.
-
 The :envvar:`COCOTB_TOPLEVEL` variable is also often used by the Makefile-based build and runner system.
 
 The :envvar:`SIM_CMD_PREFIX` and :envvar:`SIM_CMD_SUFFIX` environment variables are also supported by the Makefile-based build and runner system.

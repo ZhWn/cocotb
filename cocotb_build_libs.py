@@ -8,7 +8,6 @@ import logging
 import os
 import subprocess
 import sys
-import sysconfig
 import textwrap
 from distutils.ccompiler import get_default_compiler
 from distutils.file_util import copy_file
@@ -219,7 +218,7 @@ class build_ext(_build_ext):
     def run(self):
         if os.name == "nt":
             create_sxs_appconfig(
-                self.get_ext_fullpath(os.path.join("cocotb", "simulator"))
+                self.get_ext_fullpath(os.path.join("cocotb", "libs", "libcocotbipc"))
             )
 
         super().run()
@@ -295,13 +294,8 @@ class build_ext(_build_ext):
             else:
                 ext.extra_link_args += ["-flto"]
 
-                rpaths = []
-                if lib_name == "simulator":
-                    rpaths += ["$ORIGIN/libs"]
-                    install_name = None
-                else:
-                    rpaths += ["$ORIGIN"]
-                    install_name = lib_name
+                rpaths = ["$ORIGIN"]
+                install_name = lib_name
 
                 if sys.platform == "darwin":
                     rpaths = [
@@ -347,10 +341,6 @@ class build_ext(_build_ext):
         """
 
         filename = _build_ext.get_ext_filename(self, ext_name)
-
-        # for the simulator python extension library, leaving suffix in place
-        if os.path.split(ext_name)[-1] == "simulator":
-            return filename
 
         head, tail = os.path.split(filename)
         tail_split = tail.split(".")
@@ -424,42 +414,6 @@ class build_ext(_build_ext):
                 )
 
 
-def _get_python_lib_link():
-    """Get name of python library used for linking"""
-
-    if sys.platform == "darwin":
-        ld_library = sysconfig.get_config_var("LIBRARY")
-    else:
-        ld_library = sysconfig.get_config_var("LDLIBRARY")
-
-    if ld_library is not None:
-        python_lib_link = os.path.splitext(ld_library)[0][3:]
-    else:
-        python_version = sysconfig.get_python_version().replace(".", "")
-        python_lib_link = "python" + python_version
-
-    return python_lib_link
-
-
-def _get_python_lib():
-    """Get the library for embedded the python interpreter"""
-
-    if os.name == "nt":
-        python_lib = _get_python_lib_link() + "." + _get_lib_ext_name()
-    elif sys.platform == "darwin":
-        python_lib = os.path.join(
-            sysconfig.get_config_var("LIBDIR"), "lib" + _get_python_lib_link() + "."
-        )
-        if os.path.exists(python_lib + "dylib"):
-            python_lib += "dylib"
-        else:
-            python_lib += "so"
-    else:
-        python_lib = "lib" + _get_python_lib_link() + "." + _get_lib_ext_name()
-
-    return python_lib
-
-
 def _get_common_lib_ext(include_dirs, share_lib_dir):
     """
     Defines common libraries.
@@ -493,34 +447,33 @@ def _get_common_lib_ext(include_dirs, share_lib_dir):
     )
 
     #
-    #  PyGPI
+    #  libcocotbipc
     #
-    pygpi_sources = [
-        os.path.join(share_lib_dir, "pygpi", "bind.cpp"),
-        os.path.join(share_lib_dir, "pygpi", "embed.cpp"),
-        os.path.join(share_lib_dir, "pygpi", "logging.cpp"),
+    ipc_sources = [
+        os.path.join(share_lib_dir, "ipc", "ipc_tcp.cpp"),
+        os.path.join(share_lib_dir, "ipc", "logging.cpp"),
+        os.path.join(share_lib_dir, "ipc", "embed.cpp"),
+        os.path.join(share_lib_dir, "ipc", "dispatcher.cpp"),
     ]
+    ipc_libraries = ["gpi"]
     if os.name == "nt":
-        pygpi_sources += ["simulator.rc"]
-    python_lib_dirs = []
-    if sys.platform == "darwin":
-        python_lib_dirs = [sysconfig.get_config_var("LIBDIR")]
-    libpygpi = Extension(
-        os.path.join("cocotb", "simulator"),
+        ipc_sources += ["libcocotbipc.rc"]
+        ipc_libraries.append("ws2_32")  # winsock
+    libcocotbipc = Extension(
+        os.path.join("cocotb", "libs", "libcocotbipc"),
         define_macros=[
-            ("PYGPI_EXPORTS", ""),
+            ("IPC_EXPORTS", ""),
             *_extra_defines,
         ],
         include_dirs=include_dirs,
-        libraries=["gpi"],
-        library_dirs=python_lib_dirs,
-        sources=pygpi_sources,
+        libraries=ipc_libraries,
+        sources=ipc_sources,
     )
 
     # The libraries in this list are compiled in order of their appearance.
     # If there is a linking dependency on one library to another,
     # the linked library must be built first.
-    return [libgpi, libpygpi]
+    return [libgpi, libcocotbipc]
 
 
 def _get_vpi_lib_ext(

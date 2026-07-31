@@ -22,9 +22,6 @@ maintainers = [
     {name = "Philipp Wagner"},
 ]
 dependencies = [
-    # For finding the libpython on the system so the GPI can preload it before
-    # embedding the Python interpreter.
-    "find_libpython",
     # Backport of Python 3.11's ExceptionGroups that are thrown by TaskManager.
     "exceptiongroup; python_version < '3.11'",
     # For assertion rewriting, `raises` and `warns` context managers,
@@ -352,7 +349,6 @@ release_test = [
     # Work around that by explicitly installing the dependencies first from
     # PyPi, and then installing cocotb itself from the local dist directory.
     "exceptiongroup; python_version<'3.11'",
-    "find_libpython",
     "pytest>=6",
 ]
 

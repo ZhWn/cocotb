@@ -73,16 +73,6 @@ Python Test Runner
     for simulators that do not have a built-in waveform viewer (like Verilator).
     The executable name will be called with the name of the waveform file as the argument.
 
-.. envvar:: LIBPYTHON_LOC
-
-    Type: :ref:`env-string`
-
-    The absolute path to the Python library associated with the current Python installation;
-    i.e. ``libpython.so`` or ``python.dll`` on Windows.
-    This is determined with ``cocotb-config --libpython`` during build.
-
-    This is only used if :envvar:`GPI_USERS` is not already defined by the user.
-
 .. envvar:: SIM_CMD_PREFIX
 
     Prefix for simulation command invocations.
