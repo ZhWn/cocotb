@@ -11,7 +11,6 @@ succeeds, but calling most functions raises :exc:`RuntimeError`.
 
 from __future__ import annotations
 
-import base64
 import errno
 import warnings
 from typing import Any, Callable
@@ -64,18 +63,6 @@ def _get_client() -> IpcClient:
     if _client is None or not _client.is_connected:
         raise RuntimeError("No simulator available!")
     return _client
-
-
-def _encode_bytes(value: bytes) -> dict[str, str]:
-    return {"__bytes__": base64.b64encode(value).decode("ascii")}
-
-
-def _decode_bytes(value: Any) -> bytes:
-    if isinstance(value, dict):
-        encoded = value.get("__bytes__")
-        if isinstance(encoded, str):
-            return base64.b64decode(encoded)
-    raise RuntimeError("Simulator returned an invalid byte string")
 
 
 class _Handle:
@@ -178,7 +165,7 @@ class sim_obj(_Handle):
         return _get_client().request("get_signal_val_real", self._hdl)
 
     def get_signal_val_str(self) -> bytes:
-        return _decode_bytes(_get_client().request("get_signal_val_str", self._hdl))
+        return _get_client().request("get_signal_val_str", self._hdl)
 
     def get_signed(self) -> int:
         return _get_client().request("get_signed", self._hdl)
@@ -205,9 +192,7 @@ class sim_obj(_Handle):
         _get_client().request("set_signal_val_real", self._hdl, action, value)
 
     def set_signal_val_str(self, action: int, value: bytes) -> None:
-        _get_client().request(
-            "set_signal_val_str", self._hdl, action, _encode_bytes(value)
-        )
+        _get_client().request("set_signal_val_str", self._hdl, action, value)
 
 
 class cpp_clock(_Handle):
@@ -240,7 +225,7 @@ class cpp_clock(_Handle):
         try:
             if _client is not None:
                 _client.request("delete_clock", self._hdl)
-        except Exception:  # noqa: BLE001, S110 - best-effort cleanup during teardown
+        except Exception:
             pass
 
 

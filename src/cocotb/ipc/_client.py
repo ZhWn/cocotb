@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 from __future__ import annotations
 
-import json
 import logging
 import sys
 import threading
 import traceback
 from typing import Any, Callable
 
+from ._protocol import Protocol, create_protocol
 from ._transport import SocketTransport
 
 CallbackFunc = Callable[..., Any]
@@ -27,8 +27,11 @@ class IpcClient:
     waits for callback acknowledgements).
     """
 
-    def __init__(self, transport: SocketTransport) -> None:
+    def __init__(
+        self, transport: SocketTransport, protocol: Protocol | None = None
+    ) -> None:
         self._transport = transport
+        self._protocol = protocol if protocol is not None else create_protocol()
         self._send_lock = threading.Lock()
         # Guards socket reads and message dispatch. Reentrant so that requests
         # issued from within callbacks (dispatched while holding the lock) can
@@ -97,15 +100,14 @@ class IpcClient:
         """
         self._next_msg_id += 1
         msg_id = self._next_msg_id
-        payload = json.dumps(
+        payload = self._protocol.encode(
             {
                 "type": "request",
                 "id": msg_id,
                 "method": method,
                 "args": list(args),
-            },
-            separators=(",", ":"),
-        ).encode("utf-8")
+            }
+        )
 
         entry: dict[str, Any] = {
             "done": False,
@@ -115,7 +117,7 @@ class IpcClient:
         }
         self._pending[msg_id] = entry
         with self._send_lock:
-            self._transport.send(payload + b"\n")
+            self._transport.send_frame(payload)
         try:
             if threading.current_thread() is self._receiver:
                 # We are inside a callback dispatched by the reader thread and
@@ -137,7 +139,7 @@ class IpcClient:
     def _read_and_dispatch(self) -> None:
         if self._closed.is_set():
             raise RuntimeError("IPC connection to simulator lost")
-        line = self._transport.recv_line()
+        line = self._transport.recv_frame()
         if line is None:
             self._closed.set()
             self._fail_all_pending("IPC connection to simulator lost")
@@ -152,8 +154,8 @@ class IpcClient:
 
     def _dispatch_message(self, line: bytes) -> None:
         try:
-            message = json.loads(line.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError):
+            message = self._protocol.decode(line)
+        except (ValueError, UnicodeDecodeError):
             return
         if not isinstance(message, dict):
             return
@@ -207,13 +209,17 @@ class IpcClient:
         except SystemExit:
             # Printing a SystemExit calls exit(1), which we don't want.
             result = -1
-        except BaseException:  # noqa: BLE001 - exceptions raised by user callbacks must not break the IPC protocol
+        except BaseException:
             exc = traceback.format_exc()
             if self._log_func is not None and self._get_logger is not None:
                 try:
                     self._log_func(
-                        self._get_logger("root"), logging.ERROR,
-                        __file__, 0, exc, "ipc_client",
+                        self._get_logger("root"),
+                        logging.ERROR,
+                        __file__,
+                        0,
+                        exc,
+                        "ipc_client",
                     )
                 except BaseException:
                     sys.stderr.write(exc)
@@ -223,13 +229,12 @@ class IpcClient:
         self._send_callback_ack(message.get("id"), result)
 
     def _send_callback_ack(self, msg_id: Any, result: int) -> None:
-        payload = json.dumps(
-            {"type": "callback_ack", "id": msg_id, "result": result},
-            separators=(",", ":"),
-        ).encode("utf-8")
+        payload = self._protocol.encode(
+            {"type": "callback_ack", "id": msg_id, "result": result}
+        )
         with self._send_lock:
             try:
-                self._transport.send(payload + b"\n")
+                self._transport.send_frame(payload)
             except OSError:
                 self._closed.set()
 
@@ -246,7 +251,7 @@ class IpcClient:
                 message.get("msg") or "",
                 message.get("function") or "",
             )
-        except BaseException:  # noqa: BLE001 - logging failures must not break the IPC protocol
+        except BaseException:
             traceback.print_exc()
 
     def _message_loop(self) -> None:

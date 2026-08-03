@@ -5,10 +5,15 @@
 // TCP loopback transport for the cocotb IPC layer.
 //
 // The simulator process listens on an ephemeral TCP port on the loopback
-// interface and the Python child process connects to it.
+// interface and the Python child process connects to it. Messages are
+// length-prefixed frames `[u32 LE length][payload]`; TCP_NODELAY is enabled
+// on both sockets so small control messages are not stalled by Nagle's
+// algorithm.
 
 #include "./ipc_base.hpp"
+#include "./ipc_shm.hpp"
 
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -73,7 +78,9 @@ class TcpTransport : public IpcTransport {
         return true;
     }
 
-    uint16_t get_port() const override { return port_; }
+    std::string get_endpoint() const override {
+        return std::to_string(port_);
+    }
 
     bool wait_for_client(long timeout_ms) override {
         if (listen_sock_ == kInvalidSocket) {
@@ -102,7 +109,10 @@ class TcpTransport : public IpcTransport {
         }
 
         client_sock_ = accept(listen_sock_, nullptr, nullptr);
-        return client_sock_ != kInvalidSocket;
+        if (client_sock_ == kInvalidSocket) {
+            return false;
+        }
+        return enable_nodelay();
     }
 
     bool send(const char *data, size_t len) override {
@@ -125,18 +135,30 @@ class TcpTransport : public IpcTransport {
         return true;
     }
 
-    bool recv_line(std::string &out) override {
+    bool recv_frame(std::string &out) override {
         while (true) {
-            auto newline = recv_buf_.find('\n');
-            if (newline != std::string::npos) {
-                out.assign(recv_buf_, 0, newline);
-                recv_buf_.erase(0, newline + 1);
-                return true;
+            if (recv_buf_.size() >= 4) {
+                uint32_t len = 0;
+                for (int i = 0; i < 4; ++i) {
+                    len |= static_cast<uint32_t>(
+                               static_cast<unsigned char>(recv_buf_[i]))
+                           << (8 * i);
+                }
+                if (len > kMaxPayload) {
+                    // Refuse to buffer an absurd frame.
+                    close();
+                    return false;
+                }
+                if (recv_buf_.size() >= static_cast<size_t>(4 + len)) {
+                    out.assign(recv_buf_, 4, len);
+                    recv_buf_.erase(0, 4 + len);
+                    return true;
+                }
             }
             if (client_sock_ == kInvalidSocket) {
                 return false;
             }
-            char chunk[4096];
+            char chunk[65536];
 #ifdef _WIN32
             int n = ::recv(client_sock_, chunk, sizeof(chunk), 0);
 #else
@@ -149,7 +171,7 @@ class TcpTransport : public IpcTransport {
             }
             recv_buf_.append(chunk, static_cast<size_t>(n));
             if (recv_buf_.size() > 16 * 1024 * 1024) {
-                // Refuse to buffer more than 16 MiB without a newline.
+                // Refuse to buffer more than 16 MiB without a frame header.
                 close();
                 return false;
             }
@@ -178,6 +200,15 @@ class TcpTransport : public IpcTransport {
     }
 
   private:
+    static constexpr size_t kMaxPayload = 1u << 30;
+
+    bool enable_nodelay() {
+        int enabled = 1;
+        return setsockopt(client_sock_, IPPROTO_TCP, TCP_NODELAY,
+                          reinterpret_cast<const char *>(&enabled),
+                          sizeof(enabled)) == 0;
+    }
+
 #ifdef _WIN32
     static constexpr SOCKET kInvalidSocket = INVALID_SOCKET;
     SOCKET listen_sock_ = kInvalidSocket;
@@ -193,15 +224,17 @@ class TcpTransport : public IpcTransport {
 
 }  // namespace
 
-IpcTransport *IpcTransport::create() { return new TcpTransport(); }
-
-bool send_json(IpcTransport &transport, const std::string &message) {
-    return transport.send(message.data(), message.size()) &&
-           transport.send("\n", 1);
-}
-
-bool recv_json(IpcTransport &transport, std::string &message) {
-    return transport.recv_line(message);
+IpcTransport *IpcTransport::create() {
+    // COCOTB_IPC_TRANSPORT selects the transport backend: "tcp" (default)
+    // or "shm" (shared memory). Unknown values fall back to TCP.
+    const char *env = std::getenv("COCOTB_IPC_TRANSPORT");
+    if (env && std::strcmp(env, "shm") == 0) {
+        IpcTransport *shm = create_shm_transport();
+        if (shm) {
+            return shm;
+        }
+    }
+    return new TcpTransport();
 }
 
 }  // namespace ipc

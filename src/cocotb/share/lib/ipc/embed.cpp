@@ -39,7 +39,7 @@
 #endif
 
 using cocotb::ipc::IpcTransport;
-using cocotb::ipc::JsonValue;
+using cocotb::ipc::IpcValue;
 
 static IpcTransport *ipc_transport = nullptr;
 
@@ -47,40 +47,33 @@ static uint64_t next_msg_id = 1;
 
 static bool initialized = false;
 
-bool cocotb::ipc::send_msg(const JsonValue &msg) {
-    const std::string serialized = cocotb::ipc::serialize(msg);
-    return cocotb::ipc::send_json(*ipc_transport, serialized);
+bool cocotb::ipc::send_msg(const IpcValue &msg) {
+    return cocotb::ipc::send_value(*ipc_transport, cocotb::ipc::g_ipc_protocol,
+                                   msg, 0);
 }
 
 // Sends a `callback` message and processes incoming requests reentrantly
 // until the matching `callback_ack` arrives. Returns 0 on success.
 static int wait_for_ack(uint64_t expected_id, int *result) {
     while (true) {
-        std::string line;
-        if (!cocotb::ipc::recv_json(*ipc_transport, line)) {
+        IpcValue msg;
+        if (!cocotb::ipc::recv_value(*ipc_transport,
+                                     cocotb::ipc::g_ipc_protocol, msg, 0)) {
             IPC_LOG_ERROR("IPC: connection to Python process lost");
             return -1;
         }
 
-        JsonValue msg;
-        if (!cocotb::ipc::parse_json(line.data(), line.data() + line.size(),
-                                     msg)) {
-            IPC_LOG_ERROR("IPC: failed to parse message from Python: %s",
-                          line.c_str());
-            continue;
-        }
-
-        const JsonValue *type = msg.get("type");
+        const IpcValue *type = msg.get("type");
         if (!type || !type->is_string()) {
             continue;
         }
         const std::string &type_str = type->get_string();
 
         if (type_str == "callback_ack") {
-            const JsonValue *id = msg.get("id");
+            const IpcValue *id = msg.get("id");
             if (id && id->is_int() &&
                 id->get_int() == static_cast<int64_t>(expected_id)) {
-                const JsonValue *res = msg.get("result");
+                const IpcValue *res = msg.get("result");
                 *result = (res && res->is_int())
                               ? static_cast<int>(res->get_int())
                               : -1;
@@ -90,10 +83,10 @@ static int wait_for_ack(uint64_t expected_id, int *result) {
         }
 
         if (type_str == "request") {
-            JsonValue request_result;
+            IpcValue request_result;
             std::string error;
             bool ok = cocotb::ipc::dispatch_request(msg, request_result, error);
-            JsonValue response =
+            IpcValue response =
                 cocotb::ipc::make_result(ok, std::move(request_result), error,
                                          cocotb::ipc::request_id(msg));
             if (!cocotb::ipc::send_msg(response)) {
@@ -117,11 +110,11 @@ int cocotb::ipc::ipc_cb_handler(void *user_data) {
     cocotb::ipc::IpcCallbackData *data =
         static_cast<cocotb::ipc::IpcCallbackData *>(user_data);
     DEFER(delete data);
-    JsonValue msg = JsonValue::object();
-    msg.set("type", JsonValue::string("callback"));
-    msg.set("func", JsonValue::string("gpi"));
-    msg.set("id", JsonValue::integer(static_cast<int64_t>(next_msg_id++)));
-    msg.set("cb_id", JsonValue::integer(static_cast<int64_t>(data->cb_id)));
+    IpcValue msg = IpcValue::object();
+    msg.set("type", IpcValue::string("callback"));
+    msg.set("func", IpcValue::string("gpi"));
+    msg.set("id", IpcValue::integer(static_cast<int64_t>(next_msg_id++)));
+    msg.set("cb_id", IpcValue::integer(static_cast<int64_t>(data->cb_id)));
     if (!cocotb::ipc::send_msg(msg)) {
         return -1;
     }
@@ -134,6 +127,7 @@ int cocotb::ipc::ipc_cb_handler(void *user_data) {
 }
 
 static int start_of_sim_time(void *) {
+    IPC_LOG_INFO("IPC: start_of_sim_time callback");
     IPC_LOG_TRACE("GPI Start Sim => [ IPC Start ]");
     DEFER(IPC_LOG_TRACE("[ IPC Start ] => GPI Start Sim"));
 
@@ -143,10 +137,10 @@ static int start_of_sim_time(void *) {
     }
     initialized = true;
 
-    JsonValue msg = JsonValue::object();
-    msg.set("type", JsonValue::string("callback"));
-    msg.set("func", JsonValue::string("start_of_sim_time"));
-    msg.set("id", JsonValue::integer(static_cast<int64_t>(next_msg_id++)));
+    IpcValue msg = IpcValue::object();
+    msg.set("type", IpcValue::string("callback"));
+    msg.set("func", IpcValue::string("start_of_sim_time"));
+    msg.set("id", IpcValue::integer(static_cast<int64_t>(next_msg_id++)));
     if (!cocotb::ipc::send_msg(msg)) {
         return -1;
     }
@@ -159,6 +153,7 @@ static int start_of_sim_time(void *) {
 }
 
 static void end_of_sim_time(void *) {
+    IPC_LOG_INFO("IPC: end_of_sim_time callback");
     IPC_LOG_TRACE("GPI End Sim => [ IPC End ]");
     DEFER(IPC_LOG_TRACE("[ IPC End ] => GPI End Sim"));
 
@@ -166,10 +161,10 @@ static void end_of_sim_time(void *) {
         return;
     }
 
-    JsonValue msg = JsonValue::object();
-    msg.set("type", JsonValue::string("callback"));
-    msg.set("func", JsonValue::string("end_of_sim_time"));
-    msg.set("id", JsonValue::integer(static_cast<int64_t>(next_msg_id++)));
+    IpcValue msg = IpcValue::object();
+    msg.set("type", IpcValue::string("callback"));
+    msg.set("func", IpcValue::string("end_of_sim_time"));
+    msg.set("id", IpcValue::integer(static_cast<int64_t>(next_msg_id++)));
     if (!cocotb::ipc::send_msg(msg)) {
         return;
     }
@@ -179,14 +174,15 @@ static void end_of_sim_time(void *) {
 }
 
 static void finalize(void *) {
+    IPC_LOG_INFO("IPC: finalize callback");
     IPC_LOG_TRACE("GPI Finalize => [ IPC Finalize ]");
     DEFER(IPC_LOG_TRACE("[ IPC Finalize ] => GPI Finalize"));
 
     if (ipc_transport) {
-        JsonValue msg = JsonValue::object();
-        msg.set("type", JsonValue::string("callback"));
-        msg.set("func", JsonValue::string("finalize"));
-        msg.set("id", JsonValue::integer(static_cast<int64_t>(next_msg_id++)));
+        IpcValue msg = IpcValue::object();
+        msg.set("type", IpcValue::string("callback"));
+        msg.set("func", IpcValue::string("finalize"));
+        msg.set("id", IpcValue::integer(static_cast<int64_t>(next_msg_id++)));
         if (cocotb::ipc::send_msg(msg)) {
             int result = 0;
             wait_for_ack(next_msg_id - 1, &result);
@@ -204,7 +200,7 @@ static void finalize(void *) {
  * Python child process management
  *******************************************************************************/
 
-static int spawn_python_child(uint16_t port) {
+static int spawn_python_child(const std::string &endpoint) {
     const char *python_bin = getenv("PYGPI_PYTHON_BIN");
     if (!python_bin) {
         IPC_LOG_ERROR(
@@ -213,15 +209,14 @@ static int spawn_python_child(uint16_t port) {
         return -1;
     }
 
-    const std::string port_str = std::to_string(port);
-    IPC_LOG_INFO("Starting Python interpreter %s -m cocotb.ipc %s", python_bin,
-                 port_str.c_str());
+    IPC_LOG_INFO("Starting Python interpreter %s -m cocotb.ipc %s",
+                 python_bin, endpoint.c_str());
 
 #ifdef _WIN32
     std::string cmdline = "\"";
     cmdline += python_bin;
     cmdline += "\" -m cocotb.ipc ";
-    cmdline += port_str;
+    cmdline += endpoint;
 
     std::vector<char> mutable_cmdline(cmdline.begin(), cmdline.end());
     mutable_cmdline.push_back('\0');
@@ -238,6 +233,20 @@ static int spawn_python_child(uint16_t port) {
     HANDLE nul_handle = CreateFileA("NUL", GENERIC_READ | GENERIC_WRITE,
                                     FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
                                     OPEN_EXISTING, 0, nullptr);
+    HANDLE out_handle = nul_handle;
+    // When debugging, redirect the child's stdout/stderr to a file so that
+    // Python tracebacks are visible (the child's std handles are otherwise
+    // on NUL).
+    const char *debug_file = getenv("COCOTB_IPC_SPAWN_DEBUG");
+    if (debug_file && *debug_file) {
+        HANDLE fh = CreateFileA(debug_file, GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                                OPEN_ALWAYS, 0, nullptr);
+        if (fh != INVALID_HANDLE_VALUE) {
+            SetFilePointer(fh, 0, nullptr, FILE_END);
+        }
+        out_handle = fh;
+    }
 
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -246,16 +255,18 @@ static int spawn_python_child(uint16_t port) {
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = nul_handle;
-    si.hStdOutput = nul_handle;
-    si.hStdError = nul_handle;
+    si.hStdOutput = out_handle;
+    si.hStdError = out_handle;
 
     if (!CreateProcessA(nullptr, mutable_cmdline.data(), nullptr, nullptr,
                         TRUE, 0, nullptr, nullptr, &si, &pi)) {
+        if (out_handle != nul_handle) CloseHandle(out_handle);
         CloseHandle(nul_handle);
         IPC_LOG_ERROR("Failed to start Python process: %lu",
                       static_cast<unsigned long>(GetLastError()));
         return -1;
     }
+    if (out_handle != nul_handle) CloseHandle(out_handle);
     CloseHandle(nul_handle);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
@@ -267,8 +278,8 @@ static int spawn_python_child(uint16_t port) {
         return -1;
     }
     if (pid == 0) {
-        execl(python_bin, python_bin, "-m", "cocotb.ipc", port_str.c_str(),
-              static_cast<char *>(nullptr));
+        execl(python_bin, python_bin, "-m", "cocotb.ipc",
+              endpoint.c_str(), static_cast<char *>(nullptr));
         _exit(127);
     }
     return 0;
@@ -293,6 +304,7 @@ static void ipc_init_debug() {
 extern "C" IPC_EXPORT void initialize(void) {
     ipc_init_debug();
     ipc_logging_initialize();
+    cocotb::ipc::resolve_protocol();
 
     IPC_LOG_TRACE("GPI Init => [ IPC Init ]");
     DEFER(IPC_LOG_TRACE("[ IPC Init ] => GPI Init"));
@@ -337,7 +349,7 @@ extern "C" IPC_EXPORT void initialize(void) {
 
     ipc_set_transport(ipc_transport);
 
-    if (spawn_python_child(ipc_transport->get_port())) {
+    if (spawn_python_child(ipc_transport->get_endpoint())) {
         ipc_transport->close();
         delete ipc_transport;
         ipc_transport = nullptr;
@@ -346,8 +358,8 @@ extern "C" IPC_EXPORT void initialize(void) {
 
     // Wait for the Python process to connect. A generous timeout is used so
     // that a failure to start the child process doesn't hang the simulator.
-    IPC_LOG_INFO("Waiting for Python process to connect on port %u",
-                 static_cast<unsigned>(ipc_transport->get_port()));
+    IPC_LOG_INFO("Waiting for Python process to connect on %s",
+                 ipc_transport->get_endpoint().c_str());
     if (!ipc_transport->wait_for_client(60000)) {
         IPC_LOG_ERROR("Timed out waiting for the Python process to connect");
         ipc_transport->close();

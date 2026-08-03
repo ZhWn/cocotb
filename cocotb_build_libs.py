@@ -451,11 +451,17 @@ def _get_common_lib_ext(include_dirs, share_lib_dir):
     #
     ipc_sources = [
         os.path.join(share_lib_dir, "ipc", "ipc_tcp.cpp"),
+        os.path.join(share_lib_dir, "ipc", "ipc_shm.cpp"),
+        os.path.join(share_lib_dir, "ipc", "ipc_protocol.cpp"),
+        os.path.join(share_lib_dir, "ipc", "codec_json.cpp"),
+        os.path.join(share_lib_dir, "ipc", "codec_binary.cpp"),
         os.path.join(share_lib_dir, "ipc", "logging.cpp"),
         os.path.join(share_lib_dir, "ipc", "embed.cpp"),
         os.path.join(share_lib_dir, "ipc", "dispatcher.cpp"),
     ]
     ipc_libraries = ["gpi"]
+    if sys.platform.startswith("linux"):
+        ipc_libraries.append("rt")  # shm_open / sem_open on older glibc
     if os.name == "nt":
         ipc_sources += ["libcocotbipc.rc"]
         ipc_libraries.append("ws2_32")  # winsock

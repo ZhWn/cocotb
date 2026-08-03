@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "../utils.hpp"  // DEFER
-#include "./json.hpp"
+#include "./ipc_protocol.hpp"  // send_value, g_ipc_protocol
 
 static int ipc_log_level = GPI_NOTSET;
 
@@ -61,19 +61,18 @@ static void ipc_send_log(const char *name, enum gpi_log_level level,
         }
     }
 
-    using cocotb::ipc::JsonValue;
-    JsonValue log_msg = JsonValue::object();
-    log_msg.set("type", JsonValue::string("log"));
-    log_msg.set("logger", JsonValue::string(name));
-    log_msg.set("level", JsonValue::integer(level));
-    log_msg.set("filename", JsonValue::string(pathname));
-    log_msg.set("lineno", JsonValue::integer(lineno));
-    log_msg.set("msg", JsonValue::string(std::string(log_buff.data())));
-    log_msg.set("function", JsonValue::string(funcname));
+    using cocotb::ipc::IpcValue;
+    IpcValue log_msg = IpcValue::object();
+    log_msg.set("type", IpcValue::string("log"));
+    log_msg.set("logger", IpcValue::string(name));
+    log_msg.set("level", IpcValue::integer(level));
+    log_msg.set("filename", IpcValue::string(pathname));
+    log_msg.set("lineno", IpcValue::integer(lineno));
+    log_msg.set("msg", IpcValue::string(std::string(log_buff.data())));
+    log_msg.set("function", IpcValue::string(funcname));
 
-    const std::string serialized = cocotb::ipc::serialize(log_msg);
-    if (!ipc_transport->send(serialized.data(), serialized.size()) ||
-        !ipc_transport->send("\n", 1)) {
+    if (!cocotb::ipc::send_value(*ipc_transport, cocotb::ipc::g_ipc_protocol,
+                                 log_msg, 0)) {
         if (!ipc_log_send_failed) {
             ipc_log_send_failed = 1;
             fprintf(stderr,

@@ -30,8 +30,6 @@ namespace {
 
 using HandleKind = cocotb::ipc::HandleKind;
 
-std::string base64_decode(const std::string &in);
-
 std::unordered_map<uint64_t, HandleEntry> &handle_table() {
     static std::unordered_map<uint64_t, HandleEntry> table;
     return table;
@@ -55,7 +53,7 @@ T get_handle(HandleKind kind, uint64_t id) {
 
 class Args {
   public:
-    Args(const std::vector<JsonValue> &args, std::string &error)
+    Args(const std::vector<IpcValue> &args, std::string &error)
         : args_(args), error_(error) {}
 
     bool size(size_t n) {
@@ -75,18 +73,15 @@ class Args {
         return true;
     }
 
-    // Byte arrays are transported as {"__bytes__": "<base64>"}.
+    // Byte arrays are first-class IpcValue::bytes values; the codec is
+    // responsible for translating them to/from the wire format, so the
+    // dispatcher never sees the legacy {"__bytes__": ...} marker.
     bool get_bytes(size_t idx, std::string &out) {
-        if (idx >= args_.size() || !args_[idx].is_object()) {
+        if (idx >= args_.size() || !args_[idx].is_bytes()) {
             error_ = "Expected a bytes argument";
             return false;
         }
-        const JsonValue *marker = args_[idx].get("__bytes__");
-        if (!marker || !marker->is_string()) {
-            error_ = "Expected a bytes argument";
-            return false;
-        }
-        out = base64_decode(marker->get_string());
+        out = args_[idx].get_bytes();
         return true;
     }
 
@@ -130,79 +125,9 @@ class Args {
     }
 
   private:
-    const std::vector<JsonValue> &args_;
+    const std::vector<IpcValue> &args_;
     std::string &error_;
 };
-
-/*******************************************************************************
- * Byte encoding
- *******************************************************************************/
-
-const char b64chars[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-std::string base64_encode(const char *data, size_t len) {
-    std::string out;
-    out.reserve(((len + 2) / 3) * 4);
-    for (size_t i = 0; i < len; i += 3) {
-        unsigned a = static_cast<unsigned char>(data[i]);
-        unsigned b = i + 1 < len ? static_cast<unsigned char>(data[i + 1]) : 0;
-        unsigned c = i + 2 < len ? static_cast<unsigned char>(data[i + 2]) : 0;
-        out.push_back(b64chars[a >> 2]);
-        out.push_back(b64chars[((a & 3) << 4) | (b >> 4)]);
-        out.push_back(i + 1 < len ? b64chars[((b & 15) << 2) | (c >> 6)] : '=');
-        out.push_back(i + 2 < len ? b64chars[c & 63] : '=');
-    }
-    return out;
-}
-
-int b64_value(char c) {
-    if (c >= 'A' && c <= 'Z') {
-        return c - 'A';
-    }
-    if (c >= 'a' && c <= 'z') {
-        return c - 'a' + 26;
-    }
-    if (c >= '0' && c <= '9') {
-        return c - '0' + 52;
-    }
-    if (c == '+') {
-        return 62;
-    }
-    if (c == '/') {
-        return 63;
-    }
-    return -1;
-}
-
-std::string base64_decode(const std::string &in) {
-    std::string out;
-    out.reserve((in.size() / 4) * 3);
-    unsigned buf = 0;
-    int bits = 0;
-    for (char ch : in) {
-        if (ch == '=' || ch == '\n' || ch == '\r') {
-            continue;
-        }
-        int v = b64_value(ch);
-        if (v < 0) {
-            return out;
-        }
-        buf = (buf << 6) | static_cast<unsigned>(v);
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(static_cast<char>((buf >> bits) & 0xFF));
-        }
-    }
-    return out;
-}
-
-JsonValue bytes_result(const char *data, size_t len) {
-    JsonValue msg = JsonValue::object();
-    msg.set("__bytes__", JsonValue::string(base64_encode(data, len)));
-    return msg;
-}
 
 /*******************************************************************************
  * Clock implementation, ported from the legacy Python extension
@@ -340,22 +265,14 @@ void remove_handle(uint64_t id) {
     }
 }
 
-uint64_t request_id(const JsonValue &msg) {
-    const JsonValue *id = msg.get("id");
-    if (id && id->is_int()) {
-        return static_cast<uint64_t>(id->get_int());
-    }
-    return 0;
-}
-
 /*******************************************************************************
  * Request dispatch
  *******************************************************************************/
 
-bool dispatch_request(const JsonValue &msg, JsonValue &result,
+bool dispatch_request(const IpcValue &msg, IpcValue &result,
                       std::string &error) {
-    const JsonValue *method = msg.get("method");
-    const JsonValue *args = msg.get("args");
+    const IpcValue *method = msg.get("method");
+    const IpcValue *args = msg.get("args");
     if (!method || !method->is_string()) {
         error = "Malformed request: missing method";
         return false;
@@ -366,14 +283,14 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
     }
 
     const std::string &m = method->get_string();
-    const std::vector<JsonValue> &a = args->array_ref();
+    const std::vector<IpcValue> &a = args->array_ref();
 
     if (m == "get_sim_time") {
         uint32_t high, low;
         gpi_get_sim_time(&high, &low);
-        JsonValue arr = JsonValue::array();
-        arr.push_back(JsonValue::integer(static_cast<int64_t>(high)));
-        arr.push_back(JsonValue::integer(static_cast<int64_t>(low)));
+        IpcValue arr = IpcValue::array();
+        arr.push_back(IpcValue::integer(static_cast<int64_t>(high)));
+        arr.push_back(IpcValue::integer(static_cast<int64_t>(low)));
         result = std::move(arr);
         return true;
     }
@@ -381,17 +298,17 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
     if (m == "get_precision") {
         int32_t precision;
         gpi_get_sim_precision(&precision);
-        result = JsonValue::integer(precision);
+        result = IpcValue::integer(precision);
         return true;
     }
 
     if (m == "get_simulator_product") {
-        result = JsonValue::string(gpi_get_simulator_product());
+        result = IpcValue::string(gpi_get_simulator_product());
         return true;
     }
 
     if (m == "get_simulator_version") {
-        result = JsonValue::string(gpi_get_simulator_version());
+        result = IpcValue::string(gpi_get_simulator_version());
         return true;
     }
 
@@ -402,9 +319,9 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
             error = "Failed to get simulator arguments";
             return false;
         }
-        JsonValue arr = JsonValue::array();
+        IpcValue arr = IpcValue::array();
         for (int i = 0; i < argc; i++) {
-            arr.push_back(JsonValue::string(argv[i]));
+            arr.push_back(IpcValue::string(argv[i]));
         }
         result = std::move(arr);
         return true;
@@ -419,27 +336,27 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         gpi_sim_hdl hdl = gpi_get_root_handle(
             name.empty() ? nullptr : name.c_str());
         uint64_t id = add_handle(HandleKind::Obj, hdl);
-        result = id ? JsonValue::integer(static_cast<int64_t>(id))
-                    : JsonValue::null();
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
         return true;
     }
 
     if (m == "is_running") {
-        result = JsonValue::boolean(gpi_has_registered_impl());
+        result = IpcValue::boolean(gpi_has_registered_impl());
         return true;
     }
 
     if (m == "package_iterate") {
         gpi_iterator_hdl hdl = gpi_iterate(nullptr, GPI_PACKAGE_SCOPES);
         uint64_t id = add_handle(HandleKind::Iterator, hdl);
-        result = id ? JsonValue::integer(static_cast<int64_t>(id))
-                    : JsonValue::null();
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
         return true;
     }
 
     if (m == "stop_simulator") {
         gpi_finish();
-        result = JsonValue::null();
+        result = IpcValue::null();
         return true;
     }
 
@@ -450,7 +367,7 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
             return false;
         }
         ipc_logging_set_level(static_cast<enum gpi_log_level>(level));
-        result = JsonValue::null();
+        result = IpcValue::null();
         return true;
     }
 
@@ -458,14 +375,14 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         // The Python side registers its logging callbacks; from here on the
         // log handler forwards GPI log messages to the Python process.
         ipc_logging_configure();
-        result = JsonValue::null();
+        result = IpcValue::null();
         return true;
     }
 
     if (m == "set_sim_event_callback") {
         // The Python side keeps track of its own callback; the C side simply
         // notifies it via the `end_of_sim_time` callback message.
-        result = JsonValue::null();
+        result = IpcValue::null();
         return true;
     }
 
@@ -487,8 +404,8 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
             hdl = gpi_register_nexttime_callback(ipc_cb_handler, data);
         }
         uint64_t id = add_handle(HandleKind::Callback, hdl);
-        result = id ? JsonValue::integer(static_cast<int64_t>(id))
-                    : JsonValue::null();
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
         return true;
     }
 
@@ -503,8 +420,8 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         gpi_cb_hdl hdl =
             gpi_register_timed_callback(ipc_cb_handler, data, time);
         uint64_t id = add_handle(HandleKind::Callback, hdl);
-        result = id ? JsonValue::integer(static_cast<int64_t>(id))
-                    : JsonValue::null();
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
         return true;
     }
 
@@ -526,8 +443,8 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         gpi_cb_hdl hdl = gpi_register_value_change_callback(
             ipc_cb_handler, data, sig_hdl, static_cast<gpi_edge>(edge));
         uint64_t id = add_handle(HandleKind::Callback, hdl);
-        result = id ? JsonValue::integer(static_cast<int64_t>(id))
-                    : JsonValue::null();
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
         return true;
     }
 
@@ -549,7 +466,7 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         delete static_cast<IpcCallbackData *>(cb_data);
         gpi_remove_cb(cb_hdl);
         remove_handle(cb_id);
-        result = JsonValue::null();
+        result = IpcValue::null();
         return true;
     }
 
@@ -568,8 +485,8 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         gpi_iterator_hdl hdl =
             gpi_iterate(obj_hdl, static_cast<gpi_iterator_sel>(type));
         uint64_t id = add_handle(HandleKind::Iterator, hdl);
-        result = id ? JsonValue::integer(static_cast<int64_t>(id))
-                    : JsonValue::null();
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
         return true;
     }
 
@@ -588,12 +505,12 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         gpi_sim_hdl obj_hdl = gpi_next(iter_hdl);
         if (!obj_hdl) {
             // End of iteration.
-            result = JsonValue::null();
+            result = IpcValue::null();
             return true;
         }
         uint64_t id = add_handle(HandleKind::Obj, obj_hdl);
-        result = id ? JsonValue::integer(static_cast<int64_t>(id))
-                    : JsonValue::null();
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
         return true;
     }
 
@@ -615,18 +532,18 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
                 error = "Simulator yielded a null pointer instead of binstr";
                 return false;
             }
-            result = JsonValue::string(value);
+            result = IpcValue::string(value);
         } else if (m == "get_signal_val_str") {
             const char *value = gpi_get_signal_value_str(obj_hdl);
             if (!value) {
                 error = "Simulator yielded a null pointer instead of string";
                 return false;
             }
-            result = bytes_result(value, std::strlen(value));
+            result = IpcValue::bytes(std::string(value, std::strlen(value)));
         } else if (m == "get_signal_val_real") {
-            result = JsonValue::floating(gpi_get_signal_value_real(obj_hdl));
+            result = IpcValue::floating(gpi_get_signal_value_real(obj_hdl));
         } else {
-            result = JsonValue::integer(
+            result = IpcValue::integer(
                 static_cast<int64_t>(gpi_get_signal_value_long(obj_hdl)));
         }
         return true;
@@ -672,7 +589,7 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
             gpi_set_signal_value_int(obj_hdl, static_cast<int32_t>(value),
                                      set_action);
         }
-        result = JsonValue::null();
+        result = IpcValue::null();
         return true;
     }
 
@@ -694,7 +611,7 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
             error = "Simulator yielded a null pointer instead of a string";
             return false;
         }
-        result = JsonValue::string(value);
+        result = IpcValue::string(value);
         return true;
     }
 
@@ -723,8 +640,8 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         gpi_sim_hdl child = gpi_get_handle_by_name(
             obj_hdl, name.c_str(), static_cast<gpi_discovery>(discovery));
         uint64_t id = add_handle(HandleKind::Obj, child);
-        result = id ? JsonValue::integer(static_cast<int64_t>(id))
-                    : JsonValue::null();
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
         return true;
     }
 
@@ -743,8 +660,8 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         gpi_sim_hdl child = gpi_get_handle_by_index(
             obj_hdl, static_cast<int32_t>(index));
         uint64_t id = add_handle(HandleKind::Obj, child);
-        result = id ? JsonValue::integer(static_cast<int64_t>(id))
-                    : JsonValue::null();
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
         return true;
     }
 
@@ -766,7 +683,7 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
             error = "Simulator yielded a null pointer instead of a string";
             return false;
         }
-        result = JsonValue::string(value);
+        result = IpcValue::string(value);
         return true;
     }
 
@@ -783,20 +700,20 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
             return false;
         }
         if (m == "get_type") {
-            result = JsonValue::integer(gpi_get_object_type(obj_hdl));
+            result = IpcValue::integer(gpi_get_object_type(obj_hdl));
         } else if (m == "get_const") {
-            result = JsonValue::boolean(gpi_is_constant(obj_hdl) != 0);
+            result = IpcValue::boolean(gpi_is_constant(obj_hdl) != 0);
         } else if (m == "get_signed") {
-            result = JsonValue::integer(gpi_is_signed(obj_hdl));
+            result = IpcValue::integer(gpi_is_signed(obj_hdl));
         } else if (m == "get_num_elems") {
-            result = JsonValue::integer(gpi_get_num_elems(obj_hdl));
+            result = IpcValue::integer(gpi_get_num_elems(obj_hdl));
         } else if (m == "get_indexable") {
-            result = JsonValue::boolean(gpi_is_indexable(obj_hdl) != 0);
+            result = IpcValue::boolean(gpi_is_indexable(obj_hdl) != 0);
         } else {
-            JsonValue arr = JsonValue::array();
-            arr.push_back(JsonValue::integer(gpi_get_range_left(obj_hdl)));
-            arr.push_back(JsonValue::integer(gpi_get_range_right(obj_hdl)));
-            arr.push_back(JsonValue::integer(gpi_get_range_dir(obj_hdl)));
+            IpcValue arr = IpcValue::array();
+            arr.push_back(IpcValue::integer(gpi_get_range_left(obj_hdl)));
+            arr.push_back(IpcValue::integer(gpi_get_range_right(obj_hdl)));
+            arr.push_back(IpcValue::integer(gpi_get_range_dir(obj_hdl)));
             result = std::move(arr);
         }
         return true;
@@ -815,8 +732,8 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         }
         GpiClock *gpi_clk = new GpiClock(obj_hdl);
         uint64_t id = add_handle(HandleKind::Clock, gpi_clk);
-        result = id ? JsonValue::integer(static_cast<int64_t>(id))
-                    : JsonValue::null();
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
         return true;
     }
 
@@ -834,7 +751,7 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         }
         delete gpi_clk;
         remove_handle(clk_id);
-        result = JsonValue::null();
+        result = IpcValue::null();
         return true;
     }
 
@@ -852,7 +769,7 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         }
         if (m == "clock_stop") {
             gpi_clk->stop();
-            result = JsonValue::integer(0);
+            result = IpcValue::integer(0);
             return true;
         }
         uint64_t period, high;
@@ -866,7 +783,7 @@ bool dispatch_request(const JsonValue &msg, JsonValue &result,
         // appropriate exception type.
         int ret = gpi_clk->start(
             period, high, start_high, static_cast<gpi_set_action>(set_action));
-        result = JsonValue::integer(ret);
+        result = IpcValue::integer(ret);
         return true;
     }
 

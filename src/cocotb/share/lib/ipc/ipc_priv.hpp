@@ -17,7 +17,8 @@
 #include <cstdint>  // uint64_t
 #include <string>
 
-#include "./json.hpp"
+#include "./ipc_value.hpp"
+#include "./ipc_protocol.hpp"
 
 #ifdef IPC_EXPORTS
 #define IPC_EXPORT COCOTB_EXPORT
@@ -50,17 +51,16 @@ void *get_handle(HandleKind kind, uint64_t id);
 void remove_handle(uint64_t id);
 
 // Request dispatch. Defined in dispatcher.cpp.
-bool dispatch_request(const JsonValue &msg, JsonValue &result,
+bool dispatch_request(const IpcValue &msg, IpcValue &result,
                       std::string &error);
-uint64_t request_id(const JsonValue &msg);
 
 // GPI callback invoked when a simulator callback fires; notifies the Python
 // process and waits for the callback acknowledgement. Defined in embed.cpp.
 int ipc_cb_handler(void *user_data);
 
-// Serializes and sends a message over the current transport, appending the
-// trailing newline. Defined in embed.cpp.
-bool send_msg(const JsonValue &msg);
+// Serializes and sends a message over the current transport using the
+// selected codec. Defined in embed.cpp.
+bool send_msg(const IpcValue &msg);
 
 }  // namespace ipc
 }  // namespace cocotb

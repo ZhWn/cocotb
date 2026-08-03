@@ -2,148 +2,92 @@
 // Licensed under the Revised BSD License, see LICENSE for details.
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Minimal JSON value type, parser and serializer for the cocotb IPC layer.
-//
-// This is intentionally self-contained (no external dependencies) and covers
-// just the subset of JSON needed by the IPC protocol: null, booleans,
-// integers, doubles, strings, arrays and objects.
+#include "./codec_json.hpp"
 
-#ifndef COCOTB_IPC_JSON_HPP_
-#define COCOTB_IPC_JSON_HPP_
-
-#include <cerrno>    // errno, ERANGE
-#include <cmath>     // strtod
-#include <cstdint>   // int64_t, uint64_t
-#include <cstdio>    // snprintf
-#include <cstdlib>   // strtod, strtoll
+#include <cerrno>  // errno, ERANGE
+#include <cstdio>  // snprintf
+#include <cstdlib>  // strtod, strtoll
+#include <cstring>
 #include <string>
 #include <utility>  // move
 #include <vector>
 
 namespace cocotb {
 namespace ipc {
+namespace codec_json {
 
-enum class JsonType {
-    Null,
-    Bool,
-    Int,
-    Float,
-    String,
-    Array,
-    Object,
-};
+namespace {
 
-class JsonValue {
-  public:
-    JsonValue() : type_(JsonType::Null), bool_(false), int_(0), float_(0.0) {}
+/*******************************************************************************
+ * base64 (the wire encoding of IpcValue::bytes inside JSON documents)
+ *******************************************************************************/
 
-    static JsonValue null() { return JsonValue(); }
+const char b64chars[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    static JsonValue boolean(bool value) {
-        JsonValue v;
-        v.type_ = JsonType::Bool;
-        v.bool_ = value;
-        return v;
+std::string base64_encode(const char *data, size_t len) {
+    std::string out;
+    out.reserve(((len + 2) / 3) * 4);
+    for (size_t i = 0; i < len; i += 3) {
+        unsigned a = static_cast<unsigned char>(data[i]);
+        unsigned b = i + 1 < len ? static_cast<unsigned char>(data[i + 1]) : 0;
+        unsigned c = i + 2 < len ? static_cast<unsigned char>(data[i + 2]) : 0;
+        out.push_back(b64chars[a >> 2]);
+        out.push_back(b64chars[((a & 3) << 4) | (b >> 4)]);
+        out.push_back(i + 1 < len ? b64chars[((b & 15) << 2) | (c >> 6)] : '=');
+        out.push_back(i + 2 < len ? b64chars[c & 63] : '=');
     }
+    return out;
+}
 
-    static JsonValue integer(int64_t value) {
-        JsonValue v;
-        v.type_ = JsonType::Int;
-        v.int_ = value;
-        return v;
+int b64_value(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return c - 'A';
     }
-
-    static JsonValue floating(double value) {
-        JsonValue v;
-        v.type_ = JsonType::Float;
-        v.float_ = value;
-        return v;
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a' + 26;
     }
-
-    static JsonValue string(std::string value) {
-        JsonValue v;
-        v.type_ = JsonType::String;
-        v.str_ = std::move(value);
-        return v;
+    if (c >= '0' && c <= '9') {
+        return c - '0' + 52;
     }
-
-    static JsonValue array() {
-        JsonValue v;
-        v.type_ = JsonType::Array;
-        return v;
+    if (c == '+') {
+        return 62;
     }
-
-    static JsonValue object() {
-        JsonValue v;
-        v.type_ = JsonType::Object;
-        return v;
+    if (c == '/') {
+        return 63;
     }
+    return -1;
+}
 
-    JsonType type() const { return type_; }
-
-    bool is_null() const { return type_ == JsonType::Null; }
-    bool is_bool() const { return type_ == JsonType::Bool; }
-    bool is_int() const { return type_ == JsonType::Int; }
-    bool is_float() const { return type_ == JsonType::Float; }
-    bool is_string() const { return type_ == JsonType::String; }
-    bool is_array() const { return type_ == JsonType::Array; }
-    bool is_object() const { return type_ == JsonType::Object; }
-
-    bool get_bool() const { return bool_; }
-    int64_t get_int() const { return int_; }
-    double get_float() const { return type_ == JsonType::Float ? float_ : static_cast<double>(int_); }
-    const std::string &get_string() const { return str_; }
-
-    std::vector<JsonValue> &array_ref() { return array_; }
-    const std::vector<JsonValue> &array_ref() const { return array_; }
-
-    const std::vector<std::pair<std::string, JsonValue>> &object_ref() const {
-        return object_;
-    }
-
-    // Object access. `get` returns nullptr when the key is absent.
-    JsonValue *get(const char *key) {        for (auto &entry : object_) {
-            if (entry.first == key) {
-                return &entry.second;
-            }
+std::string base64_decode(const std::string &in) {
+    std::string out;
+    out.reserve((in.size() / 4) * 3);
+    unsigned buf = 0;
+    int bits = 0;
+    for (char ch : in) {
+        if (ch == '=' || ch == '\n' || ch == '\r') {
+            continue;
         }
-        return nullptr;
-    }
-
-    const JsonValue *get(const char *key) const {
-        for (const auto &entry : object_) {
-            if (entry.first == key) {
-                return &entry.second;
-            }
+        int v = b64_value(ch);
+        if (v < 0) {
+            return out;
         }
-        return nullptr;
-    }
-
-    void set(const std::string &key, JsonValue value) {
-        for (auto &entry : object_) {
-            if (entry.first == key) {
-                entry.second = std::move(value);
-                return;
-            }
+        buf = (buf << 6) | static_cast<unsigned>(v);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<char>((buf >> bits) & 0xFF));
         }
-        object_.push_back(std::make_pair(key, std::move(value)));
     }
+    return out;
+}
 
-    void push_back(JsonValue value) { array_.push_back(std::move(value)); }
+/*******************************************************************************
+ * JSON encoder
+ *******************************************************************************/
 
-  private:
-    JsonType type_;
-    bool bool_;
-    int64_t int_;
-    double float_;
-    std::string str_;
-    std::vector<JsonValue> array_;
-    std::vector<std::pair<std::string, JsonValue>> object_;
-};
-
-namespace detail {
-
-inline void append_escaped(std::string &out, const char *begin, const char *end) {
+inline void append_escaped(std::string &out, const char *begin,
+                           const char *end) {
     out.push_back('"');
     for (const char *c = begin; c != end; ++c) {
         unsigned char ch = static_cast<unsigned char>(*c);
@@ -189,29 +133,34 @@ inline void append_number(std::string &out, double value) {
     out += buf;
 }
 
-}  // namespace detail
-
-inline std::string serialize(const JsonValue &value) {
-    std::string out;
+void encode_value(const IpcValue &value, std::string &out) {
     switch (value.type()) {
-        case JsonType::Null:
+        case IpcType::Null:
             out += "null";
             break;
-        case JsonType::Bool:
+        case IpcType::Bool:
             out += value.get_bool() ? "true" : "false";
             break;
-        case JsonType::Int:
+        case IpcType::Int:
             out += std::to_string(value.get_int());
             break;
-        case JsonType::Float:
-            detail::append_number(out, value.get_float());
+        case IpcType::Float:
+            append_number(out, value.get_float());
             break;
-        case JsonType::String: {
+        case IpcType::String: {
             const std::string &str = value.get_string();
-            detail::append_escaped(out, str.data(), str.data() + str.size());
+            append_escaped(out, str.data(), str.data() + str.size());
             break;
         }
-        case JsonType::Array: {
+        case IpcType::Bytes: {
+            // Wire marker, byte-compatible with the legacy protocol.
+            const std::string &raw = value.get_bytes();
+            out += "{\"__bytes__\":\"";
+            out += base64_encode(raw.data(), raw.size());
+            out += "\"}";
+            break;
+        }
+        case IpcType::Array: {
             out.push_back('[');
             bool first = true;
             for (const auto &item : value.array_ref()) {
@@ -219,12 +168,12 @@ inline std::string serialize(const JsonValue &value) {
                     out.push_back(',');
                 }
                 first = false;
-                out += serialize(item);
+                encode_value(item, out);
             }
             out.push_back(']');
             break;
         }
-        case JsonType::Object: {
+        case IpcType::Object: {
             out.push_back('{');
             bool first = true;
             for (const auto &entry : value.object_ref()) {
@@ -232,34 +181,41 @@ inline std::string serialize(const JsonValue &value) {
                     out.push_back(',');
                 }
                 first = false;
-                detail::append_escaped(out, entry.first.data(),
-                                       entry.first.data() + entry.first.size());
+                append_escaped(out, entry.first.data(),
+                               entry.first.data() + entry.first.size());
                 out.push_back(':');
-                out += serialize(entry.second);
+                encode_value(entry.second, out);
             }
             out.push_back('}');
             break;
         }
     }
-    return out;
 }
 
-// Parses a single JSON value starting at *c (which must point at the first
-// non-whitespace character of the value) and advances *c past the value.
-// Returns true on success.
-inline bool parse_value(const char *&c, const char *end, JsonValue &out) {
+/*******************************************************************************
+ * JSON parser (ported from the legacy json.hpp, semantics unchanged)
+ *******************************************************************************/
+
+inline bool is_ws(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+bool parse_value(const char *&c, const char *end, IpcValue &out) {
+    if (c == end) {
+        return false;
+    }
     switch (*c) {
         case 'n':
             if (end - c >= 4 && c[1] == 'u' && c[2] == 'l' && c[3] == 'l') {
                 c += 4;
-                out = JsonValue::null();
+                out = IpcValue::null();
                 return true;
             }
             return false;
         case 't':
             if (end - c >= 4 && c[1] == 'r' && c[2] == 'u' && c[3] == 'e') {
                 c += 4;
-                out = JsonValue::boolean(true);
+                out = IpcValue::boolean(true);
                 return true;
             }
             return false;
@@ -267,7 +223,7 @@ inline bool parse_value(const char *&c, const char *end, JsonValue &out) {
             if (end - c >= 5 && c[1] == 'a' && c[2] == 'l' && c[3] == 's' &&
                 c[4] == 'e') {
                 c += 5;
-                out = JsonValue::boolean(false);
+                out = IpcValue::boolean(false);
                 return true;
             }
             return false;
@@ -278,7 +234,7 @@ inline bool parse_value(const char *&c, const char *end, JsonValue &out) {
                 unsigned char ch = static_cast<unsigned char>(*c);
                 if (ch == '"') {
                     ++c;
-                    out = JsonValue::string(std::move(str));
+                    out = IpcValue::string(std::move(str));
                     return true;
                 }
                 if (ch == '\\') {
@@ -334,11 +290,13 @@ inline bool parse_value(const char *&c, const char *end, JsonValue &out) {
                                 str.push_back(static_cast<char>(code));
                             } else if (code < 0x800) {
                                 str.push_back(static_cast<char>(0xC0 | (code >> 6)));
-                                str.push_back(static_cast<char>(0x80 | (code & 0x3F)));
-                            } else {
-                                str.push_back(static_cast<char>(0xE0 | (code >> 12)));
                                 str.push_back(
-                                    static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+                                    static_cast<char>(0x80 | (code & 0x3F)));
+                            } else {
+                                str.push_back(
+                                    static_cast<char>(0xE0 | (code >> 12)));
+                                str.push_back(static_cast<char>(
+                                    0x80 | ((code >> 6) & 0x3F)));
                                 str.push_back(static_cast<char>(0x80 | (code & 0x3F)));
                             }
                             break;
@@ -357,11 +315,10 @@ inline bool parse_value(const char *&c, const char *end, JsonValue &out) {
             return false;
         }
         case '[': {
-            JsonValue arr = JsonValue::array();
+            IpcValue arr = IpcValue::array();
             ++c;  // skip '['
             while (true) {
-                while (c != end &&
-                       (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r')) {
+                while (c != end && is_ws(*c)) {
                     ++c;
                 }
                 if (c == end) {
@@ -372,13 +329,12 @@ inline bool parse_value(const char *&c, const char *end, JsonValue &out) {
                     out = std::move(arr);
                     return true;
                 }
-                JsonValue item;
+                IpcValue item;
                 if (!parse_value(c, end, item)) {
                     return false;
                 }
                 arr.push_back(std::move(item));
-                while (c != end &&
-                       (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r')) {
+                while (c != end && is_ws(*c)) {
                     ++c;
                 }
                 if (c == end) {
@@ -396,11 +352,10 @@ inline bool parse_value(const char *&c, const char *end, JsonValue &out) {
             }
         }
         case '{': {
-            JsonValue obj = JsonValue::object();
+            IpcValue obj = IpcValue::object();
             ++c;  // skip '{'
             while (true) {
-                while (c != end &&
-                       (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r')) {
+                while (c != end && is_ws(*c)) {
                     ++c;
                 }
                 if (c == end) {
@@ -414,25 +369,24 @@ inline bool parse_value(const char *&c, const char *end, JsonValue &out) {
                 if (*c != '"') {
                     return false;
                 }
-                JsonValue key_value;
-                if (!parse_value(c, end, key_value)) {
+                IpcValue key_value;
+                if (!parse_value(c, end, key_value) || !key_value.is_string()) {
                     return false;
                 }
-                while (c != end &&
-                       (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r')) {
+                const std::string key = key_value.get_string();
+                while (c != end && is_ws(*c)) {
                     ++c;
                 }
                 if (c == end || *c != ':') {
                     return false;
                 }
                 ++c;
-                JsonValue member;
+                IpcValue member;
                 if (!parse_value(c, end, member)) {
                     return false;
                 }
-                obj.set(key_value.get_string(), std::move(member));
-                while (c != end &&
-                       (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r')) {
+                obj.set(key, std::move(member));
+                while (c != end && is_ws(*c)) {
                     ++c;
                 }
                 if (c == end) {
@@ -472,15 +426,15 @@ inline bool parse_value(const char *&c, const char *end, JsonValue &out) {
                     return false;
                 }
                 if (is_float) {
-                    out = JsonValue::floating(std::strtod(num.c_str(), nullptr));
+                    out = IpcValue::floating(std::strtod(num.c_str(), nullptr));
                 } else {
                     errno = 0;
                     long long ll = std::strtoll(num.c_str(), nullptr, 10);
                     if (errno == ERANGE || ll > INT64_MAX || ll < INT64_MIN) {
                         // Too large for int64; fall back to double.
-                        out = JsonValue::floating(std::strtod(num.c_str(), nullptr));
+                        out = IpcValue::floating(std::strtod(num.c_str(), nullptr));
                     } else {
-                        out = JsonValue::integer(ll);
+                        out = IpcValue::integer(ll);
                     }
                 }
                 return true;
@@ -490,17 +444,45 @@ inline bool parse_value(const char *&c, const char *end, JsonValue &out) {
     }
 }
 
-// Parses one JSON value from [begin, end). Returns true and stores the result
-// in `out` on success; `out` is left untouched otherwise. When `consumed_end`
-// is non-null it is set to the position just past the parsed value (useful for
-// parsing the members of arrays and objects); otherwise only whitespace is
-// allowed past the value.
-inline bool parse_json(const char *begin, const char *end, JsonValue &out,
-                       const char **consumed_end = nullptr) {
+// Recursively replaces `{"__bytes__": "<base64>"}` object markers with
+// IpcValue::bytes values, matching the historical wire marker semantics.
+IpcValue demark(const IpcValue &value) {
+    if (value.is_object() && value.object_ref().size() == 1) {
+        const IpcValue *marker = value.get("__bytes__");
+        if (marker && marker->is_string()) {
+            return IpcValue::bytes(base64_decode(marker->get_string()));
+        }
+    }
+    if (value.is_object()) {
+        IpcValue obj = IpcValue::object();
+        for (const auto &entry : value.object_ref()) {
+            obj.set(entry.first, demark(entry.second));
+        }
+        return obj;
+    }
+    if (value.is_array()) {
+        IpcValue arr = IpcValue::array();
+        for (const auto &item : value.array_ref()) {
+            arr.push_back(demark(item));
+        }
+        return arr;
+    }
+    return value;
+}
+
+}  // namespace
+
+std::string encode(const IpcValue &value) {
+    std::string out;
+    encode_value(value, out);
+    return out;
+}
+
+bool decode(const char *begin, const char *end, IpcValue &out) {
     const char *c = begin;
 
     // Skip leading whitespace.
-    while (c != end && (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r')) {
+    while (c != end && is_ws(*c)) {
         ++c;
     }
 
@@ -508,39 +490,23 @@ inline bool parse_json(const char *begin, const char *end, JsonValue &out,
         return false;
     }
 
-    if (!parse_value(c, end, out)) {
+    IpcValue parsed;
+    if (!parse_value(c, end, parsed)) {
         return false;
     }
 
-    if (consumed_end != nullptr) {
-        *consumed_end = c;
-        return true;
-    }
-
     // Skip trailing whitespace; nothing else may follow the value.
-    while (c != end && (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r')) {
+    while (c != end && is_ws(*c)) {
         ++c;
     }
-    return c == end;
-}
-
-// Serializes a response payload into a JsonValue; non-finite doubles are
-// turned into `null`.
-inline JsonValue make_result(bool ok, JsonValue result, const std::string &error,
-                             uint64_t id) {
-    JsonValue msg = JsonValue::object();
-    msg.set("type", JsonValue::string("response"));
-    msg.set("id", JsonValue::integer(static_cast<int64_t>(id)));
-    msg.set("ok", JsonValue::boolean(ok));
-    if (ok) {
-        msg.set("result", std::move(result));
-    } else {
-        msg.set("error", JsonValue::string(error));
+    if (c != end) {
+        return false;
     }
-    return msg;
+
+    out = demark(parsed);
+    return true;
 }
 
+}  // namespace codec_json
 }  // namespace ipc
 }  // namespace cocotb
-
-#endif /* COCOTB_IPC_JSON_HPP_ */
