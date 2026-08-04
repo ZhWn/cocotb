@@ -273,6 +273,11 @@ def package_iterate() -> sim_obj_iterator | None:
     return None if hdl is None else sim_obj_iterator(hdl)
 
 
+def root_iterate() -> sim_obj_iterator | None:
+    hdl = _get_client().request("root_iterate")
+    return None if hdl is None else sim_obj_iterator(hdl)
+
+
 def register_readonly_callback(func: Callable[..., Any], *args: Any) -> sim_callback:
     client = _get_client()
     cb_id = client.register_callback(func, args)

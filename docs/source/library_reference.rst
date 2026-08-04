@@ -902,6 +902,8 @@ Other Runtime Information
 
         :envvar:`TOPLEVEL` is a deprecated alias and will be removed.
 
+.. autodata:: cocotb.tops
+
 .. autodata:: cocotb.packages
 
 .. autodata:: cocotb.SIM_NAME

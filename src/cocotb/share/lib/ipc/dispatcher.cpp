@@ -341,6 +341,14 @@ bool dispatch_request(const IpcValue &msg, IpcValue &result,
         return true;
     }
 
+    if (m == "root_iterate") {
+        gpi_iterator_hdl hdl = gpi_iterate(nullptr, GPI_ROOTS);
+        uint64_t id = add_handle(HandleKind::Iterator, hdl);
+        result = id ? IpcValue::integer(static_cast<int64_t>(id))
+                    : IpcValue::null();
+        return true;
+    }
+
     if (m == "is_running") {
         result = IpcValue::boolean(gpi_has_registered_impl());
         return true;
