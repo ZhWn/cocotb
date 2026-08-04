@@ -127,7 +127,6 @@ int cocotb::ipc::ipc_cb_handler(void *user_data) {
 }
 
 static int start_of_sim_time(void *) {
-    IPC_LOG_INFO("IPC: start_of_sim_time callback");
     IPC_LOG_TRACE("GPI Start Sim => [ IPC Start ]");
     DEFER(IPC_LOG_TRACE("[ IPC Start ] => GPI Start Sim"));
 
@@ -153,7 +152,6 @@ static int start_of_sim_time(void *) {
 }
 
 static void end_of_sim_time(void *) {
-    IPC_LOG_INFO("IPC: end_of_sim_time callback");
     IPC_LOG_TRACE("GPI End Sim => [ IPC End ]");
     DEFER(IPC_LOG_TRACE("[ IPC End ] => GPI End Sim"));
 
@@ -174,7 +172,6 @@ static void end_of_sim_time(void *) {
 }
 
 static void finalize(void *) {
-    IPC_LOG_INFO("IPC: finalize callback");
     IPC_LOG_TRACE("GPI Finalize => [ IPC Finalize ]");
     DEFER(IPC_LOG_TRACE("[ IPC Finalize ] => GPI Finalize"));
 
@@ -234,19 +231,6 @@ static int spawn_python_child(const std::string &endpoint) {
                                     FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
                                     OPEN_EXISTING, 0, nullptr);
     HANDLE out_handle = nul_handle;
-    // When debugging, redirect the child's stdout/stderr to a file so that
-    // Python tracebacks are visible (the child's std handles are otherwise
-    // on NUL).
-    const char *debug_file = getenv("COCOTB_IPC_SPAWN_DEBUG");
-    if (debug_file && *debug_file) {
-        HANDLE fh = CreateFileA(debug_file, GENERIC_WRITE,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
-                                OPEN_ALWAYS, 0, nullptr);
-        if (fh != INVALID_HANDLE_VALUE) {
-            SetFilePointer(fh, 0, nullptr, FILE_END);
-        }
-        out_handle = fh;
-    }
 
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
