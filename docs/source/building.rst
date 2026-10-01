@@ -160,11 +160,9 @@ Make Variables
 
 .. make:var:: LIBPYTHON_LOC
 
-    The absolute path to the Python library associated with the current Python installation;
-    i.e. ``libpython.so`` or ``python.dll`` on Windows.
-    This is determined with ``cocotb-config --libpython`` during build.
-
-    This is only used if :envvar:`GPI_USERS` is not already defined by the user.
+    Deprecated and ignored.
+    cocotb no longer loads Python into the simulator process,
+    so the location of the Python library is not needed.
 
 The :envvar:`COCOTB_TOPLEVEL` variable is also often used by the Makefile-based build and runner system.
 

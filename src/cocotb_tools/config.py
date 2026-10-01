@@ -25,8 +25,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import find_libpython
-
 import cocotb_tools
 
 base_tools_dir = Path(cocotb_tools.__file__).parent.resolve()
@@ -110,9 +108,24 @@ def _help_vars_text() -> str:
 
 
 def pygpi_entry_point() -> str:
-    import cocotb.simulator  # noqa: PLC0415
+    """Return the GPI user entry that starts the cocotb IPC server.
 
-    return f"{Path(cocotb.simulator.__file__).resolve()},initialize"
+    GPI dlopens this library and calls its ``initialize`` symbol at
+    simulation start; the library then spawns the Python testbench process.
+    """
+    if os.name == "nt":
+        lib_ext = ".dll"
+    else:
+        lib_ext = ".so"
+
+    # check if compiled with msvc (no "lib" prefix), mirroring lib_name_path
+    if (libs_dir / "gpi.dll").is_file():
+        lib_prefix = ""
+    else:
+        lib_prefix = "lib"
+
+    lib_path = libs_dir / f"{lib_prefix}cocotbipc{lib_ext}"
+    return f"{lib_path.as_posix()},initialize"
 
 
 def lib_name_path(interface: str, simulator: str) -> Path:
@@ -223,11 +236,6 @@ def _get_parser() -> argparse.ArgumentParser:
         help="Print help about supported environment variables",
     )
     group.add_argument(
-        "--libpython",
-        action="store_true",
-        help="Print the absolute path to the libpython associated with the current Python installation",
-    )
-    group.add_argument(
         "--lib-dir",
         action="store_true",
         help="Print the absolute path to the interface libraries location",
@@ -252,7 +260,7 @@ def _get_parser() -> argparse.ArgumentParser:
     group.add_argument(
         "--pygpi-entry-point",
         action="store_true",
-        help="Print the PYGPI entry point for use in GPI_USERS",
+        help="Print the GPI user entry (cocotb IPC server library) for use in GPI_USERS",
     )
 
     return parser
@@ -270,11 +278,6 @@ def main() -> None:
         print(Path(sys.executable).as_posix())
     elif args.help_vars:
         print(_help_vars_text())
-    elif args.libpython:
-        libpython_path = find_libpython.find_libpython()
-        if libpython_path is None:
-            sys.exit(1)
-        print(Path(libpython_path).as_posix())
     elif args.lib_dir:
         print(libs_dir.as_posix())
     elif args.lib_name_path:

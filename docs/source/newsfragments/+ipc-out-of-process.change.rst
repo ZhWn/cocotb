@@ -1,0 +1,1 @@
+Run the Python testbench in a separate process spawned and supervised by the simulator and connected over a local IPC connection, instead of embedding a Python interpreter into the simulator process; the cocotb test API, Makefile flow, and environment variables are unchanged.

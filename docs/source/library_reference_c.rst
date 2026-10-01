@@ -7,7 +7,11 @@ that is an abstraction layer for the VPI, VHPI, and FLI simulator interfaces.
 
 .. image:: diagrams/svg/cocotb_overview.svg
 
-The interaction between cocotb's Python and GPI is via a Python extension module called the :ref:`PyGPI <pygpi>`.
+Cocotb's Python testbench does not run inside the simulator process.
+Instead, at simulation start the GPI loads the cocotb IPC server library (see :envvar:`GPI_USERS`),
+which spawns a separate Python process for the testbench.
+All simulator interactions—handles, callbacks, logging, and simulation control—travel between the two processes over a local IPC connection,
+which keeps the testbench debuggable and profileable like any ordinary Python process.
 
 Environment Variables
 =====================
@@ -34,8 +38,9 @@ Environment Variables
         Instead of using a full path, use the basename, and use environment variables like ``PATH`` or ``LD_LIBRARY_PATH``
         to modify your operating system's library search path.
 
-    When using the :ref:`building` or :ref:`api-runner` this defaults to load ``libpython`` and then the PyGPI entry point.
-    You can get the default PyGPI entry point at other times by calling ``cocotb-config --pygpi-entry-point`` from the shell
+    When using the :ref:`building` or :ref:`api-runner` this defaults to load the cocotb IPC server entry point,
+    which starts the Python testbench process at simulation start.
+    You can get this entry point at other times by calling ``cocotb-config --pygpi-entry-point`` from the shell
     or :func:`cocotb_tools.config.pygpi_entry_point` from Python.
 
 .. envvar:: GPI_EXTRA

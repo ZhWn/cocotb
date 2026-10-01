@@ -89,10 +89,12 @@ Debug the test ``test_array_simple`` with Questa, using the VHDL toplevel and th
 Python
 ------
 
-When executing the Makefile to run a cocotb test, a Python shell interpreter is called from within the
-:term:`VPI`/:term:`VHPI`/:term:`FLI` library.
-Hence it is not possible to directly attach a Python debugger to the Python process being part of the simulator that uses the aforementioned library.
-Using ``import pdb; pdb.set_trace()`` directly is also frequently not possible,
+When executing the Makefile to run a cocotb test, the Python testbench runs in a separate process
+that is spawned and supervised by the :term:`VPI`/:term:`VHPI`/:term:`FLI` library.
+Its process ID is printed in the ``Started Python process`` line of the start-up log,
+so a Python debugger can be attached to it like to any other process.
+
+Using ``import pdb; pdb.set_trace()`` directly may still not work,
 due to the way that simulators interfere with ``stdin``.
 
 To successfully debug your Python code use the `remote_pdb`_ Python package to create a :command:`pdb` instance

@@ -259,9 +259,12 @@ class _HierarchyObjectBase(SimHandleBase, Generic[KeyType]):
         if self._discovered:
             return
 
-        for thing in self._handle.iterate(cocotb.simulator.OBJECTS):
-            name = thing.get_name_string()
+        # Two IPC round trips total regardless of child count: one returns
+        # every child id, one fetches each child's name and GPI type.
+        things = self._handle.iterate_all(cocotb.simulator.OBJECTS)
+        names_and_types = cocotb.simulator._batch_names_and_types(things)
 
+        for thing, (name, gpi_type) in zip(things, names_and_types):
             # translate HDL name into a consistent key name
             try:
                 key = self._sub_handle_key(name)
@@ -277,7 +280,7 @@ class _HierarchyObjectBase(SimHandleBase, Generic[KeyType]):
 
             # attempt to create the child object
             try:
-                hdl = _make_sim_object(thing, path)
+                hdl = _make_sim_object(thing, path, gpi_type=gpi_type)
             except NotImplementedError:
                 self._log.exception(
                     "Unable to construct a SimHandle object for %s", path
@@ -787,8 +790,16 @@ else:
     ] = {}
 
     def _apply_scheduled_writes() -> None:
-        for func, action, value in _write_calls.values():
-            func(action.value, value)
+        if len(_write_calls) > 1:
+            # Several handles written in this timestep: ship them all in one
+            # IPC round trip instead of one per handle.
+            cocotb.simulator._batch_set_vals(
+                (func, action.value, value)
+                for func, action, value in _write_calls.values()
+            )
+        else:
+            for func, action, value in _write_calls.values():
+                func(action.value, value)
         _write_calls.clear()
 
         # Clear variable so the next scheduled writes re-primes ReadWrite()
@@ -1866,13 +1877,19 @@ _type2cls: dict[int, type[_ConcreteHandleTypes]] = {
 
 
 def _make_sim_object(
-    handle: cocotb.simulator.sim_obj, path: str | None = None
+    handle: cocotb.simulator.sim_obj,
+    path: str | None = None,
+    *,
+    gpi_type: int | None = None,
 ) -> SimHandleBase:
     """Factory function to create the correct type of `SimHandle` object.
 
     Args:
         handle: The GPI handle to the simulator object.
         path: Path to this handle.
+        gpi_type: Pre-fetched GPI type of the object. Pass this when the
+            caller already knows the type (e.g. from a batched discovery
+            query) to avoid a round trip.
 
     Returns:
         An appropriate :class:`SimHandleBase` object.
@@ -1888,7 +1905,7 @@ def _make_sim_object(
     except KeyError:
         pass
 
-    t = handle.get_type()
+    t = handle.get_type() if gpi_type is None else gpi_type
     if t not in _type2cls:
         raise NotImplementedError(
             f"Couldn't find a matching object for GPI type {handle.get_type_string()}({t}) (path={path})"

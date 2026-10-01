@@ -137,7 +137,7 @@ The cocotb part of the output will look like the following:
 .. code-block:: text
     :class: full-width
 
-      -.--ns INFO     pygpi                              ..ib/pygpi/embed.cpp:113  in initialize                      Using Python 3.12.3 interpreter at /usr/bin/python3.12
+      -.--ns INFO     gpi.ipc                            ../lib/ipc/embed.cpp:773  in initialize                      Started Python process (pid 3624), endpoint 43127
       0.00ns INFO     cocotb                             Running on Icarus Verilog version 13.0 (devel)
       0.00ns INFO     cocotb                             Seeding Python random module with 1766343030
       0.00ns INFO     cocotb                             Initialized cocotb v2.0.1 from /home/user/.local/lib/python3.12/site-packages/cocotb
@@ -159,13 +159,15 @@ The next column is the name of the logger that logged the message, such as ``coc
 Finally, the last column is the log message itself.
 
 The first few lines contain some information useful for debugging;
-including the cocotb version, the simulator used and its version, and the Python interpreter used.
+including the Python testbench process started for this simulation,
+the cocotb version, and the simulator used and its version.
 If any of these values are not what you expect them to be, your Makefile or Python environment may need to be adjusted.
+The process ID printed in the start-up line can be used to attach a debugger or profiler to the testbench process.
 
 .. code-block:: text
     :class: full-width
 
-    ..ib/pygpi/embed.cpp:113  in initialize                      Using Python 3.12.3 interpreter at /usr/bin/python3.12
+    ../lib/ipc/embed.cpp:773  in initialize                      Started Python process (pid 3624), endpoint 43127
     Running on Icarus Verilog version 13.0 (devel)
     Seeding Python random module with 1766343030
     Initialized cocotb v2.0.1 from /home/user/.local/lib/python3.12/site-packages/cocotb

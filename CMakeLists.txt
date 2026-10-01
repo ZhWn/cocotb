@@ -23,16 +23,6 @@ endif()
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Request Development.Module, not Development. The latter also requires
-# Development.Embed / libpython, which manylinux images intentionally omit.
-find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
-
-if(WIN32)
-    set(PYTHON_EXT_SUFFIX ".${Python_SOABI}.pyd")
-else()
-    set(PYTHON_EXT_SUFFIX ".${Python_SOABI}.so")
-endif()
-
 if(WIN32)
     set(LIB_EXT "dll")
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
@@ -73,7 +63,6 @@ set(EXTRA_DEFINES "__STDC_FORMAT_MACROS")
 set(INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/src/cocotb/share/include
     ${CMAKE_SOURCE_DIR}/src/cocotb
-    ${Python_INCLUDE_DIRS}
 )
 
 set(SHARE_LIB_DIR ${CMAKE_SOURCE_DIR}/src/cocotb/share/lib)
@@ -222,25 +211,15 @@ function(add_cocotb_library TARGET_NAME)
     endif()
 
     if(NOT WIN32)
-        if("${TARGET_NAME}" STREQUAL "simulator")
-            if(APPLE)
-                set(_rpath "@loader_path/libs")
-            else()
-                set(_rpath "\$ORIGIN/libs")
-            endif()
+        if(APPLE)
+            set(_rpath "@loader_path")
         else()
-            if(APPLE)
-                set(_rpath "@loader_path")
-            else()
-                set(_rpath "\$ORIGIN")
-            endif()
+            set(_rpath "\$ORIGIN")
         endif()
         set_target_properties(${TARGET_NAME} PROPERTIES INSTALL_RPATH "${_rpath}")
 
         if(APPLE)
-            if(NOT "${TARGET_NAME}" STREQUAL "simulator")
-                set_target_properties(${TARGET_NAME} PROPERTIES INSTALL_NAME_DIR "@rpath")
-            endif()
+            set_target_properties(${TARGET_NAME} PROPERTIES INSTALL_NAME_DIR "@rpath")
         endif()
     endif()
 endfunction()
@@ -261,35 +240,26 @@ add_cocotb_library(gpi
     RC_LIBRARIES ""
 )
 
-add_cocotb_library(simulator
+# Out-of-process IPC server: spawned as `python -m cocotb._ipc` by GPI and
+# drives the cocotb Python testbench over a local socket. Deliberately does
+# not link Python: the testbench runs in a separate interpreter.
+add_cocotb_library(cocotbipc
     SOURCES
-        ${SHARE_LIB_DIR}/pygpi/bind.cpp
-        ${SHARE_LIB_DIR}/pygpi/embed.cpp
-        ${SHARE_LIB_DIR}/pygpi/logging.cpp
-    DEFINES PYGPI_EXPORTS
+        ${SHARE_LIB_DIR}/ipc/codec_binary.cpp
+        ${SHARE_LIB_DIR}/ipc/codec_json.cpp
+        ${SHARE_LIB_DIR}/ipc/dispatcher.cpp
+        ${SHARE_LIB_DIR}/ipc/embed.cpp
+        ${SHARE_LIB_DIR}/ipc/ipc_protocol.cpp
+        ${SHARE_LIB_DIR}/ipc/ipc_tcp.cpp
+        ${SHARE_LIB_DIR}/ipc/logging.cpp
+    DEFINES IPC_EXPORTS
     LIBRARIES gpi
     RC_LIBRARIES ""
 )
-# Python::Module links the import library on Windows and leaves Python
-# symbols unresolved on Unix (libpython is preloaded at runtime).
-target_link_libraries(simulator PRIVATE Python::Module)
 
-if(SKBUILD_STATE STREQUAL "editable")
-    set_target_properties(simulator PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/src/cocotb
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/src/cocotb
-    )
-else()
-    set_target_properties(simulator PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cocotb
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cocotb
-    )
+if(WIN32)
+    target_link_libraries(cocotbipc PRIVATE ws2_32)
 endif()
-
-set_target_properties(simulator PROPERTIES
-    PREFIX ""
-    SUFFIX ${PYTHON_EXT_SUFFIX}
-)
 
 function(add_vpi_library SIM_NAME SIM_DEFINE)
     set(options "")
@@ -452,21 +422,6 @@ if(WIN32)
             add_custom_target(${SIM}_import_lib ALL DEPENDS ${COCOTB_DEF_DIR}/lib${SIM}.a)
         endforeach()
     endif()
-
-    set(APPCONFIG_CONTENT "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>
-<configuration>
-    <windows>
-        <assemblyBinding xmlns=\"urn:schemas-microsoft-com:asm.v1\">
-            <probing privatePath=\"libs\" />
-        </assemblyBinding>
-    </windows>
-</configuration>")
-
-    file(WRITE ${CMAKE_BINARY_DIR}/cocotb/simulator.2.config "${APPCONFIG_CONTENT}")
-    # Loader looks for <basename of pyd>.2.config next to the extension module.
-    file(WRITE ${CMAKE_BINARY_DIR}/cocotb/simulator${PYTHON_EXT_SUFFIX}.2.config
-        "${APPCONFIG_CONTENT}"
-    )
 endif()
 
 if(WIN32)
@@ -481,7 +436,7 @@ if(WIN32)
 endif()
 
 if(SKBUILD AND NOT SKBUILD_STATE STREQUAL "editable")
-    install(TARGETS gpi DESTINATION cocotb/libs)
+    install(TARGETS gpi cocotbipc DESTINATION cocotb/libs)
 
     set(SIM_TARGETS
         cocotbvpi_icarus cocotbvpi_modelsim cocotbvhpi_modelsim
@@ -495,20 +450,4 @@ if(SKBUILD AND NOT SKBUILD_STATE STREQUAL "editable")
     endif()
 
     install(TARGETS ${SIM_TARGETS} DESTINATION cocotb/libs OPTIONAL)
-
-    install(TARGETS simulator
-        RUNTIME DESTINATION cocotb
-        LIBRARY DESTINATION cocotb)
-
-    # Windows loads simulator.pyd next to cocotb/; put gpi.dll here too (also under libs/).
-    if(WIN32)
-        install(TARGETS gpi
-            RUNTIME DESTINATION cocotb
-            LIBRARY DESTINATION cocotb)
-        install(FILES ${CMAKE_BINARY_DIR}/cocotb/simulator.2.config DESTINATION cocotb)
-        file(GLOB PYD_CONFIG_FILES ${CMAKE_BINARY_DIR}/cocotb/*.pyd.2.config)
-        if(PYD_CONFIG_FILES)
-            install(FILES ${PYD_CONFIG_FILES} DESTINATION cocotb)
-        endif()
-    endif()
 endif()

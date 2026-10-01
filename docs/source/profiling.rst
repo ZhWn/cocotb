@@ -37,17 +37,16 @@ There are many ways to view the resulting profile data, but one of the most comm
 
 A sampling profiler such as ``py-spy`` is not as accurate as a tracing profiler,
 but, in general, it has less execution overhead than a tracing profiler, which may be preferable for long-running simulations.
-Additionally, some profilers such as ``py-spy`` are able to capture time spent in C++ code, which can be useful for profiling extension modules.
+Additionally, some profilers such as ``py-spy`` are able to capture time spent in cocotb's C++ code.
 
-To profile with py-spy, prefix the simulation command with py-spy using :envvar:`SIM_CMD_PREFIX`.
+Because the testbench runs in its own process, ``py-spy`` can attach to it directly.
+Start your simulation as usual and note the testbench process ID printed in the
+``Started Python process (pid ...)`` line of the start-up log,
+then, while the simulation is running, record the profile from another terminal:
 
 .. code-block:: bash
 
-    export SIM_CMD_PREFIX="py-spy record --format speedscope -o profile.ss --"
-
-    pytest
-    # or
-    make
+    py-spy record --format speedscope -o profile.ss --pid <pid>
 
 It's recommended to use the ``speedscope`` output format which provides a more interactive visualization of the profile data.
 You can open the output file in the `speedscope <https://www.speedscope.app/>`_ website, or you can view it locally by installing speedscope.

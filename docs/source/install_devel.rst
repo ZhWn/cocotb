@@ -26,12 +26,10 @@ Install with ``pip``
 Install Prerequisites
 ---------------------
 
-The development version of cocotb requires building C++ extensions.
-This requires Python development headers, a C++ compiler, and C++ development libraries.
+The development version of cocotb requires building native libraries.
+This requires a C++ compiler and C++ development libraries.
 
 * Python 3.9+
-* libpython 3.9+ to match the executable Python version
-* Python development packages
 * GCC 4.8.1+, Clang 3.3+ or Microsoft Visual C++ 14.21+ and associated development packages
 * On Linux: A static build of the C++ standard library ``libstdc++``.
   Some distributions include the static library in their default packages (e.g. Debian/Ubuntu),

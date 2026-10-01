@@ -65,7 +65,8 @@ which is convenient when redirecting one stream to a file from the shell.
 
 .. note::
    A handful of start-up messages are still written to standard output.
-   These come from the ``gpi`` and ``pygpi`` loggers,
+   These come from the ``gpi`` logger,
+   including the IPC server lines announcing the spawned testbench process,
    and from ``cocotb.initialize`` reporting the cocotb and simulator versions.
    They are emitted before cocotb imports your test module,
    so they are logged before the handler above is installed.

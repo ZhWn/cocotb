@@ -51,7 +51,8 @@ How does cocotb work?
 cocotb is a **co**\ routine-based **co**\ simulation **t**\ est\ **b**\ ench environment.
 
 This means that when the design is simulated, cocotb runs as a cosimulation using one of the procedural interfaces (:term:`VPI`, :term:`VHPI`, or :term:`FLI`).
-A Python interpreter is embedded into the running simulator process to provide a Python execution environment.
+A separate Python process is spawned for the testbench when the simulation starts and communicates with the simulator over a local IPC connection,
+providing the Python execution environment.
 A :doc:`Python library <library_reference>`
 and `coroutine <https://en.wikipedia.org/wiki/Coroutine>`_\ -based concurrency system are built on top of the procedural interfaces to interact with the simulated design in a Pythonic way.
 

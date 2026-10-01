@@ -77,11 +77,9 @@ Python Test Runner
 
     Type: :ref:`env-string`
 
-    The absolute path to the Python library associated with the current Python installation;
-    i.e. ``libpython.so`` or ``python.dll`` on Windows.
-    This is determined with ``cocotb-config --libpython`` during build.
-
-    This is only used if :envvar:`GPI_USERS` is not already defined by the user.
+    Deprecated and ignored.
+    cocotb no longer loads Python into the simulator process,
+    so the location of the Python library is not needed.
 
 .. envvar:: SIM_CMD_PREFIX
 
@@ -1163,7 +1161,9 @@ The Regression Manager
 PyGPI and the ``cocotb.simulator`` module
 -----------------------------------------
 
-The PyGPI is a Python wrapper around the :term:`GPI` (Generic Procedural Interface).
+The PyGPI is the Python side of cocotb's interface to the :term:`GPI` (Generic Procedural Interface).
+It runs in the Python testbench process spawned for the simulation;
+the ``cocotb.simulator`` module performs GPI operations by sending IPC requests to the simulator.
 
 .. envvar:: PYGPI_PYTHON_BIN
 

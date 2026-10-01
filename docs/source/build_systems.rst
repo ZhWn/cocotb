@@ -29,18 +29,21 @@ How cocotb Simulations Work
 
 When the Makefiles run a cocotb simulation, they invoke the simulator with an option to load a VPI, VHPI, or FLI extension module.
 cocotb *is* that extension module.
-This extension module, as part of its start up process, embeds a Python interpreter into the simulator process
-and then loads into a series of :envvar:`Python entry points <PYGPI_USERS>`.
+As part of its start up process, the extension module starts a separate Python process for the testbench,
+connected back to the simulator over a local IPC connection,
+which then runs a series of :envvar:`Python entry points <PYGPI_USERS>`.
 Chief among those is the one that starts up the :class:`!RegressionManager` test runner.
 
 The :class:`!RegressionManager`
 ===============================
 
-Now we are in a running simulation with a Python interpreter embedded and the cocotb library loaded.
+Now we are in a running simulation with the Python testbench process connected and the cocotb library loaded.
 We need to discover our tests, run them, and collect and report the results.
 This is the responsibility of the :class:`.RegressionManager`.
 
-The :class:`!RegressionManager` is running within the simulator process and so it must be configured with environment variables.
+The :class:`!RegressionManager` is running in the Python testbench process,
+which inherits the environment the simulator was started with,
+and so it must be configured with environment variables.
 These environment variables are set by the Makefiles when they invoke the simulator or by ``export``\ ing user-defined Makefile variables.
 
 .. code-block:: bash

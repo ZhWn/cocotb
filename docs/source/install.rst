@@ -25,7 +25,6 @@ Install Prerequisites
 The current stable version of cocotb requires:
 
 * Python 3.9+
-* libpython 3.9+ which matches the Python version
 
 The installation instructions vary depending on your operating system:
 
@@ -59,7 +58,7 @@ The installation instructions vary depending on your operating system:
 
       .. code-block:: bash
 
-          sudo apt-get install make python3 python3-pip libpython3-dev
+          sudo apt-get install make python3 python3-pip
 
    .. tab-item:: Linux - Red Hat
 
