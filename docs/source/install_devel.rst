@@ -147,6 +147,24 @@ and `CL <https://learn.microsoft.com/en-us/cpp/build/reference/cl-environment-va
 
     ``CXXFLAGS``, ``LDLIBS`` are not supported by the distutils/pip build system.
 
+Passing CMake Options
+^^^^^^^^^^^^^^^^^^^^^
+
+The native libraries are built with CMake through scikit-build-core,
+which forwards the ``CMAKE_ARGS`` environment variable to CMake as options.
+
+For example, standalone shared-library distributions can embed the cocotb
+Python packages into the testbench-side library, so the spawned testbench
+process can import cocotb even from a Python environment where cocotb is
+not installed:
+
+.. code-block:: shell
+
+    $ CMAKE_ARGS="-DCOCOTB_IPC_EMBED_ZIP=ON" pip install .
+
+``COCOTB_IPC_EMBED_ZIP`` is disabled by default because wheels do not need
+it; see :envvar:`COCOTB_IPC_EMBED` for the runtime behavior.
+
 
 Verify Installation
 -------------------

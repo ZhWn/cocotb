@@ -1221,6 +1221,34 @@ the ``cocotb.simulator`` module performs GPI operations by sending IPC requests 
 
     .. versionadded:: 2.1
 
+.. envvar:: COCOTB_IPC_EMBED
+
+    Type: :ref:`env-string`
+
+    Default: ``always``
+
+    Controls use of the Python package zip embedded in the simulator-side
+    library, which is present when cocotb was built with the
+    ``COCOTB_IPC_EMBED_ZIP`` CMake option (recommended for standalone
+    shared-library distributions; wheels do not embed a zip).
+
+    When the library carries an embedded zip, it is unpacked into the
+    system temporary directory as a single flat file named ``cocotb-ipc-*``
+    whose contents are verified on every use,
+    and appended to the ``PYTHONPATH`` of the spawned testbench process.
+    The testbench process then imports cocotb from the first of, in order:
+
+    1. the ``PYTHONPATH`` entries that were already set,
+    2. the embedded zip,
+    3. a cocotb installed in the testbench Python environment.
+
+    Set this variable to ``never`` to never use the embedded zip.
+    The testbench process then requires cocotb to be provided by one of the
+    remaining locations. If the library was built without an embedded zip,
+    this variable has no effect.
+
+    .. versionadded:: 2.2
+
 The ``cocotb.simulator`` module is the Python :keyword:`import`-able interface to the PyGPI.
 It should not be considered public API, but is documented here for developers of cocotb.
 

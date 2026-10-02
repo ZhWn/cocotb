@@ -19,6 +19,17 @@ For all simulators, the following environment variables need to be set:
 * Define :envvar:`PYGPI_PYTHON_BIN` using ``$(cocotb-config --python-bin)``.
 * Define :envvar:`COCOTB_TEST_MODULES` with the name of the Python module(s) containing your testcases.
 
+The simulator-side library spawns the Python testbench process named by
+:envvar:`PYGPI_PYTHON_BIN`.
+That process imports cocotb from the first location found in this order:
+entries in :envvar:`PYTHONPATH`,
+a package zip embedded in the simulator-side library itself
+(present only when cocotb was built with the ``COCOTB_IPC_EMBED_ZIP`` CMake
+option, see :envvar:`COCOTB_IPC_EMBED`),
+and finally a cocotb installed in that Python environment.
+A library built with an embedded zip therefore runs testbenches even in a
+Python environment where cocotb is not installed.
+
 See the sections below for additional settings to be done, depending on the simulator.
 Use ``cocotb-config --lib-entry INTERFACE SIMULATOR`` to obtain the interface library to load.
 For simulators that require an explicit entry function, the result uses the

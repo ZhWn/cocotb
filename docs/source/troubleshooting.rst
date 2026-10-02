@@ -225,3 +225,32 @@ On Mac OS, you can use ``DYLD_PRINT_LIBRARIES=1`` instead of ``LD_DEBUG=libs`` t
 On Windows, use `Process Explorer <https://docs.microsoft.com/en-us/sysinternals/downloads/process-explorer>`_.
 
 Further details are available in :issue:`1943`.
+
+
+Testbench process cannot import cocotb
+======================================
+
+The Python testbench runs in a separate process spawned by the simulator-side
+library, so that process needs its own way to find the cocotb package.
+If startup fails with ``ModuleNotFoundError: No module named 'cocotb'``,
+or an unexpected copy of cocotb is used, check which one the process
+resolved: the start-up log line ``Initialized cocotb v... from ...``
+prints the location of the imported package.
+
+The testbench process searches, in order:
+
+1. the :envvar:`PYTHONPATH` entries set for the simulation,
+2. the package zip embedded in the simulator-side library,
+   if cocotb was built with the ``COCOTB_IPC_EMBED_ZIP`` CMake option,
+3. a cocotb installed in the environment of :envvar:`PYGPI_PYTHON_BIN`.
+
+Standalone shared-library distributions embed the zip, so they work even
+where cocotb is not installed; the cache file ``cocotb-ipc-*`` in the
+system temporary directory is created on first use and reused afterwards.
+Set :envvar:`COCOTB_IPC_EMBED` to ``never`` to disable the embedded zip,
+e.g. to force the testbench process to use an installed cocotb.
+
+Wheels do not embed a zip, so with wheels the environment of
+:envvar:`PYGPI_PYTHON_BIN` must have cocotb installed.
+When using the Makefiles, that is the environment running
+``cocotb-config``, which can be checked with ``cocotb-config --version``.

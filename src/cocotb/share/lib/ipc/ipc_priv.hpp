@@ -133,6 +133,20 @@ void ipc_logging_set_level(enum gpi_log_level level);
 /** Restore the native log handler. */
 void ipc_logging_finalize();
 
+/*******************************************************************************
+ * Embedded package zip (implemented by ipc_zip.cpp)
+ ******************************************************************************/
+
+/**
+ * Path to the cocotb package zip embedded in this library (build option
+ * COCOTB_IPC_EMBED_ZIP), materialized as a flat file in the temp
+ * directory, or "" when there is none to inject: not embedded, the
+ * user disabled it with COCOTB_IPC_EMBED=never, or publication failed.
+ * The path is UTF-8 on all platforms. Computed on first use; the
+ * intended usage is one call per process (before spawning the child).
+ */
+std::string embedded_zip_path();
+
 }  // namespace ipc
 }  // namespace cocotb
 

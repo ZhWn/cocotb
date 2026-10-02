@@ -180,8 +180,149 @@ std::wstring widen(const std::string &s) {
     return out;
 }
 
+// UTF-8 -> wide for the embedded zip path: widen() above decodes the
+// ANSI codepage, which would mangle non-ASCII temp directories.
+std::wstring widen_utf8(const std::string &s) {
+    if (s.empty()) {
+        return std::wstring();
+    }
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(),
+                                static_cast<int>(s.size()), nullptr, 0);
+    if (n <= 0) {
+        return std::wstring();
+    }
+    std::wstring out(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
+                        &out[0], n);
+    return out;
+}
+
+wchar_t env_key_lower(wchar_t ch) {
+    return (ch >= L'A' && ch <= L'Z')
+               ? static_cast<wchar_t>(ch - L'A' + L'a')
+               : ch;
+}
+
+// Does `entry` (a "KEY=VALUE" string) hold `key`, compared
+// case-insensitively the way Windows treats environment names?
+bool env_entry_has_key(const std::wstring &entry, const wchar_t *key) {
+    size_t i = 0;
+    for (; key[i] != L'\0'; ++i) {
+        if (i >= entry.size() || entry[i] == L'=') {
+            return false;
+        }
+        if (env_key_lower(entry[i]) != env_key_lower(key[i])) {
+            return false;
+        }
+    }
+    return i < entry.size() && entry[i] == L'=';
+}
+
+// Case-insensitive comparison of the first `a_len`/`b_len` characters.
+int env_key_compare(const std::wstring &a, size_t a_len,
+                    const std::wstring &b, size_t b_len) {
+    const size_t common = a_len < b_len ? a_len : b_len;
+    for (size_t i = 0; i < common; ++i) {
+        const wchar_t ca = env_key_lower(a[i]);
+        const wchar_t cb = env_key_lower(b[i]);
+        if (ca != cb) {
+            return ca < cb ? -1 : 1;
+        }
+    }
+    if (a_len == b_len) {
+        return 0;
+    }
+    return a_len < b_len ? -1 : 1;
+}
+
+// Insert `entry` keeping the block sorted the way Windows maintains
+// environment strings (some lookups assume sorted blocks).
+void env_insert_sorted(std::vector<std::wstring> *entries,
+                       const std::wstring &entry) {
+    const size_t entry_sep = entry.find(L'=');
+    const size_t entry_key_len =
+        entry_sep == std::wstring::npos ? entry.size() : entry_sep;
+    typedef std::vector<std::wstring>::difference_type diff_type;
+    for (size_t i = 0; i < entries->size(); ++i) {
+        const std::wstring &other = (*entries)[i];
+        const size_t other_sep = other.find(L'=');
+        const size_t other_key_len =
+            other_sep == std::wstring::npos ? other.size() : other_sep;
+        if (env_key_compare(entry, entry_key_len, other, other_key_len) < 0) {
+            entries->insert(entries->begin() + static_cast<diff_type>(i),
+                            entry);
+            return;
+        }
+    }
+    entries->push_back(entry);
+}
+
+// The environment block for CreateProcessW: the simulator's own
+// environment, PYTHONUNBUFFERED=1 (the POSIX path sets it already;
+// Windows previously passed no block at all), and PYTHONPATH extended
+// with the embedded package zip when given. Existing PYTHONPATH entries
+// keep priority over the zip, which preserves the documented
+// resolution order: user PYTHONPATH > embedded zip > installed cocotb.
+std::vector<wchar_t> build_env_block(const std::string &pythonpath_zip) {
+    std::vector<std::wstring> entries;
+    LPWCH raw = GetEnvironmentStringsW();
+    if (raw != nullptr) {
+        for (LPWCH cursor = raw; *cursor != L'\0';) {
+            entries.push_back(std::wstring(cursor));
+            cursor += entries.back().size() + 1;
+        }
+        FreeEnvironmentStringsW(raw);
+    }
+
+    bool have_unbuffered = false;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (env_entry_has_key(entries[i], L"PYTHONUNBUFFERED")) {
+            entries[i] = L"PYTHONUNBUFFERED=1";
+            have_unbuffered = true;
+            break;
+        }
+    }
+    if (!have_unbuffered) {
+        env_insert_sorted(&entries, L"PYTHONUNBUFFERED=1");
+    }
+
+    if (!pythonpath_zip.empty()) {
+        const std::wstring zip = widen_utf8(pythonpath_zip);
+        size_t index = entries.size();
+        for (size_t i = 0; i < entries.size(); ++i) {
+            if (env_entry_has_key(entries[i], L"PYTHONPATH")) {
+                index = i;
+                break;
+            }
+        }
+        if (index == entries.size()) {
+            env_insert_sorted(&entries, L"PYTHONPATH=" + zip);
+        } else {
+            // Append the zip behind the user's entries; an empty value
+            // must not grow a leading separator (that means "cwd").
+            const size_t eq = entries[index].find(L'=');
+            const std::wstring value = entries[index].substr(eq + 1);
+            if (value.empty()) {
+                entries[index].append(zip);
+            } else {
+                entries[index].push_back(L';');
+                entries[index].append(zip);
+            }
+        }
+    }
+
+    std::vector<wchar_t> block;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        block.insert(block.end(), entries[i].begin(), entries[i].end());
+        block.push_back(L'\0');
+    }
+    block.push_back(L'\0');
+    return block;
+}
+
 bool spawn_child(const std::string &python_bin, const std::string &module,
-                 const std::string &endpoint) {
+                 const std::string &endpoint,
+                 const std::string &pythonpath_zip) {
     // Kill-on-close job object: if the simulator process dies for any
     // reason, Windows kills the child with it. No orphans.
     HANDLE job = CreateJobObjectW(nullptr, nullptr);
@@ -215,8 +356,14 @@ bool spawn_child(const std::string &python_bin, const std::string &module,
     PROCESS_INFORMATION pi;
     std::memset(&pi, 0, sizeof(pi));
 
+    // Own environment block so PYTHONUNBUFFERED and the embedded zip's
+    // PYTHONPATH reach the child (an inherited environment cannot be
+    // extended per process).
+    std::vector<wchar_t> env_block = build_env_block(pythonpath_zip);
+
     BOOL ok = CreateProcessW(nullptr, &buf[0], nullptr, nullptr, TRUE,
-                             CREATE_SUSPENDED, nullptr, nullptr, &si, &pi);
+                             CREATE_SUSPENDED, env_block.data(), nullptr, &si,
+                             &pi);
     if (!ok) {
         IPC_LOG_ERROR("Failed to spawn Python process '%s' (error %lu)",
                       cmdline.c_str(), GetLastError());
@@ -250,7 +397,8 @@ bool spawn_child(const std::string &python_bin, const std::string &module,
 #else  // POSIX
 
 bool spawn_child(const std::string &python_bin, const std::string &module,
-                 const std::string &endpoint) {
+                 const std::string &endpoint,
+                 const std::string &pythonpath_zip) {
     pid_t parent_pid = getpid();
     pid_t pid = fork();
     if (pid < 0) {
@@ -271,6 +419,18 @@ bool spawn_child(const std::string &python_bin, const std::string &module,
         // Line-buffered/unbuffered output so Python output interleaves with
         // the simulator's output in real time.
         setenv("PYTHONUNBUFFERED", "1", 1);
+
+        // Put the embedded package zip behind the user's PYTHONPATH
+        // entries, preserving the documented resolution order:
+        // user PYTHONPATH > embedded zip > installed cocotb.
+        if (!pythonpath_zip.empty()) {
+            const char *existing = getenv("PYTHONPATH");
+            const std::string pythonpath =
+                (existing != nullptr && existing[0] != '\0')
+                    ? std::string(existing) + ":" + pythonpath_zip
+                    : pythonpath_zip;
+            setenv("PYTHONPATH", pythonpath.c_str(), 1);
+        }
 
         execl(python_bin.c_str(), python_bin.c_str(), "-m", module.c_str(),
               endpoint.c_str(), (char *)nullptr);
@@ -748,8 +908,13 @@ extern "C" IPC_EXPORT void initialize(void) {
     // connects (the ready message below goes over it).
     cocotb::ipc::g_connection_alive = true;
 
+    // Materialize the cocotb package zip embedded in this library (when
+    // built with COCOTB_IPC_EMBED_ZIP) so the child can import cocotb
+    // from it without an installed copy.
+    const std::string package_zip = cocotb::ipc::embedded_zip_path();
+
     if (!spawn_child(python_bin, "cocotb._ipc",
-                     cocotb::ipc::g_transport->get_endpoint())) {
+                     cocotb::ipc::g_transport->get_endpoint(), package_zip)) {
         cocotb::ipc::g_connection_alive = false;
         cocotb::ipc::g_transport->close();
         delete cocotb::ipc::g_transport;
