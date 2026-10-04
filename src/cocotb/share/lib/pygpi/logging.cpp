@@ -2,8 +2,9 @@
 // Licensed under the Revised BSD License, see LICENSE for details.
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include <Python.h>  // all things Python
-#include <gpi.h>     // all things GPI logging
+// Provide the Python C API through the runtime symbol table (pyapi.hpp)
+// instead of linking against libpython.
+#include <gpi.h>  // all things GPI logging
 
 #include <cstdarg>  // va_list, va_copy, va_end
 #include <cstdio>   // fprintf, vsnprintf
@@ -12,6 +13,7 @@
 #include <vector>   // std::vector
 
 #include "../utils.hpp"  // DEFER
+#include "./pyapi.hpp"   // all things Python
 #include "./pygpi_priv.hpp"
 
 static int pygpi_log_level = GPI_NOTSET;
@@ -55,8 +57,18 @@ static void pygpi_log_handler(void *, const char *name,
 
     // If we haven't configured yet, use the fallback log handler
     if (!m_log_func) {
-        return fallback_log_handler(fallback_log_userdata, name, level,
-                                    pathname, funcname, lineno, msg, argp);
+        if (!fallback_log_handler) {
+            // pygpi_logging_initialize() has not run yet, e.g. an error is
+            // logged while the module is being imported in the runner
+            // process. Fetch the default handler directly instead of calling
+            // through a null function pointer.
+            gpi_get_log_handler(&fallback_log_handler, &fallback_log_userdata);
+        }
+        if (fallback_log_handler) {
+            return fallback_log_handler(fallback_log_userdata, name, level,
+                                        pathname, funcname, lineno, msg, argp);
+        }
+        return;
     }
 
     va_list argp_copy;

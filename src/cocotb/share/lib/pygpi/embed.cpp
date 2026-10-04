@@ -6,7 +6,8 @@
 
 // Embed Python into the simulator using GPI
 
-#include <Python.h>
+// pyapi.hpp provides the Python C API through the runtime symbol table in
+// ::pygpi::api instead of linking against libpython (it includes Python.h).
 #include <gpi.h>  // gpi_register_*
 
 #include <cassert>
@@ -14,7 +15,8 @@
 #include <cstring>
 #include <string>
 
-#include "../utils.hpp"      // DEFER
+#include "../utils.hpp"  // DEFER
+#include "./pyapi.hpp"
 #include "./pygpi_priv.hpp"  // pygpi_logger_set_level, pygpi_logger_initialize, pygpi_logger_finalize, LOG_* macros, PYGPI_EXPORT
 
 #if defined(_WIN32)
@@ -33,6 +35,11 @@ static bool embed_init_called = 0;
 
 static wchar_t progname[] = L"cocotb";
 static wchar_t *argv[] = {progname};
+
+// Defined in bind.cpp, registered with the interpreter via
+// PyImport_AppendInittab() so the simulator process can import
+// cocotb.simulator without loading the extension file again.
+extern "C" PyObject *PyInit_simulator(void);
 
 static int get_interpreter_path(wchar_t *path, size_t path_size) {
     const char *path_c = getenv("PYGPI_PYTHON_BIN");
@@ -101,6 +108,15 @@ extern "C" PYGPI_EXPORT void initialize(void) {
     }
     python_init_called = 1;
 
+    // Resolve the Python C API before anything uses it: this library is not
+    // linked against libpython, every symbol comes from ::pygpi::api.
+    if (!pygpi::ensure_loaded()) {
+        // LCOV_EXCL_START
+        PYGPI_LOG_ERROR("Unable to load the Python C API from libpython");
+        return;
+        // LCOV_EXCL_STOP
+    }
+
     // must set program name to Python executable before initialization, so
     // initialization can determine path from executable
 
@@ -114,42 +130,37 @@ extern "C" PYGPI_EXPORT void initialize(void) {
     PYGPI_LOG_INFO("Using Python %s interpreter at %ls", PY_VERSION,
                    interpreter_path);
 
-    /* Use the new Python Initialization Configuration from Python 3.8. */
-    PyConfig config;
-    PyStatus status;
-
-    PyConfig_InitPythonConfig(&config);
-    DEFER(PyConfig_Clear(&config));
-
-    PyConfig_SetString(&config, &config.executable, interpreter_path);
-
-    status = PyConfig_SetArgv(&config, 1, argv);
-    if (PyStatus_Exception(status)) {
+    // Make `import cocotb.simulator` inside the simulator process create the
+    // module through PyInit_simulator instead of loading the extension file a
+    // second time. Must happen before the interpreter is initialized.
+    if (PyImport_AppendInittab("cocotb.simulator", PyInit_simulator) != 0) {
         // LCOV_EXCL_START
-        PYGPI_LOG_ERROR("Failed to set ARGV during the Python initialization");
-        if (status.err_msg != NULL) {
-            PYGPI_LOG_ERROR("\terror: %s", status.err_msg);
-        }
-        if (status.func != NULL) {
-            PYGPI_LOG_ERROR("\tfunction: %s", status.func);
-        }
+        PYGPI_LOG_ERROR("Failed to register cocotb.simulator with Python");
         return;
         // LCOV_EXCL_STOP
     }
 
-    status = Py_InitializeFromConfig(&config);
-    if (PyStatus_Exception(status)) {
-        // LCOV_EXCL_START
-        PYGPI_LOG_ERROR("Failed to initialize Python");
-        if (status.err_msg != NULL) {
-            PYGPI_LOG_ERROR("\terror: %s", status.err_msg);
-        }
-        if (status.func != NULL) {
-            PYGPI_LOG_ERROR("\tfunction: %s", status.func);
-        }
-        return;
-        // LCOV_EXCL_STOP
-    }
+    // Initialize the interpreter using the classic embedding API: PyConfig
+    // and Py_InitializeFromConfig are not part of the stable ABI, and pygpi
+    // is compiled with Py_LIMITED_API, so the deprecated-but-stable
+    // Py_SetProgramName()/PySys_SetArgvEx() are used instead.
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    Py_SetProgramName(interpreter_path);
+    Py_Initialize();
+    PySys_SetArgvEx(1, argv, 0);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     /* Sanity check: make sure sys.executable was initialized to
      * interpreter_path. */
@@ -211,7 +222,10 @@ static void finalize(void *) {
     // If initialization fails, this may be called twice:
     // Before the initial callback returns and in the final callback.
     // So we check if Python is still initialized before doing cleanup.
-    if (Py_IsInitialized()) {
+    // ensure_loaded() short-circuits when initialization never got as far as
+    // loading the symbol table, so Py_IsInitialized() is never called
+    // through a null function pointer.
+    if (pygpi::ensure_loaded() && Py_IsInitialized()) {
         c_to_python();
         PyGILState_Ensure();  // Don't save state as we are calling Py_Finalize
         Py_XDECREF(pEventFn);

@@ -11,18 +11,25 @@
  * Uses GPI calls to interface to the simulator.
  */
 
-#include <Python.h>
+// pyapi.hpp provides the Python C API through the runtime symbol table in
+// ::pygpi::api instead of linking against libpython (it includes Python.h).
 #include <gpi.h>
 
 #include <cerrno>
 #include <cstdint>
+#include <vector>  // std::vector, for building PyType_Spec slots
 
-#include "../utils.hpp"      // DEFER
+#include "../utils.hpp"  // DEFER
+#include "./pyapi.hpp"
 #include "./pygpi_priv.hpp"  // pygpi_logger_set_level, c_to_python, python_to_c
 
 // This file defines the routines available to Python
 
-#define MODULE_NAME "simulator"
+// Qualified name of the module: matches the name registered with
+// PyImport_AppendInittab() in embed.cpp so that importing the module as a
+// built-in (simulator process) yields the same __name__ as the file-based
+// import in the runner process.
+#define MODULE_NAME "cocotb.simulator"
 
 // callback user data
 struct PythonCallback {
@@ -52,15 +59,22 @@ template <typename gpi_hdl_type>
 struct gpi_hdl_Object {
     PyObject_HEAD gpi_hdl_type hdl;
 
-    // The python type object, in a place that is easy to retrieve in templates
-    static PyTypeObject py_type;
+    // The python type object, in a place that is easy to retrieve in
+    // templates. Created with PyType_FromSpec() when the module is imported,
+    // because static PyTypeObject definitions are not possible under
+    // Py_LIMITED_API. The reference returned by PyType_FromSpec() is kept for
+    // the lifetime of the process so the type outlives any instance.
+    static PyTypeObject *py_type;
+    // The fully qualified type name ("cocotb.simulator.<name>"), stored
+    // separately because PyTypeObject internals are opaque in the stable ABI.
+    static const char *type_name;
 };
 
 /** __repr__ shows the memory address of the internal handle */
 template <typename gpi_hdl_type>
 static PyObject *gpi_hdl_repr(gpi_hdl_Object<gpi_hdl_type> *self) {
-    auto *type = Py_TYPE(self);
-    return PyUnicode_FromFormat("<%s at %p>", type->tp_name, self->hdl);
+    return PyUnicode_FromFormat(
+        "<%s at %p>", gpi_hdl_Object<gpi_hdl_type>::type_name, self->hdl);
 }
 
 /** __hash__ returns the pointer itself */
@@ -84,7 +98,7 @@ static PyObject *gpi_hdl_New(gpi_hdl_type hdl) {
         Py_RETURN_NONE;
     }
     auto *obj = PyObject_New(gpi_hdl_Object<gpi_hdl_type>,
-                             &gpi_hdl_Object<gpi_hdl_type>::py_type);
+                             gpi_hdl_Object<gpi_hdl_type>::py_type);
     if (obj == NULL) {
         return NULL;
     }
@@ -95,8 +109,8 @@ static PyObject *gpi_hdl_New(gpi_hdl_type hdl) {
 /** Comparison checks if the types match, and then compares pointers */
 template <typename gpi_hdl_type>
 static PyObject *gpi_hdl_richcompare(PyObject *self, PyObject *other, int op) {
-    if (Py_TYPE(self) != &gpi_hdl_Object<gpi_hdl_type>::py_type ||
-        Py_TYPE(other) != &gpi_hdl_Object<gpi_hdl_type>::py_type) {
+    if (Py_TYPE(self) != gpi_hdl_Object<gpi_hdl_type>::py_type ||
+        Py_TYPE(other) != gpi_hdl_Object<gpi_hdl_type>::py_type) {
         Py_RETURN_NOTIMPLEMENTED;
     }
 
@@ -114,28 +128,24 @@ static PyObject *gpi_hdl_richcompare(PyObject *self, PyObject *other, int op) {
     }
 }
 
-// Initialize the Python type slots
-template <typename gpi_hdl_type>
-PyTypeObject fill_common_slots() {
-    PyTypeObject type = {};
-    type.ob_base = {PyObject_HEAD_INIT(NULL) 0};
-    type.tp_basicsize = sizeof(gpi_hdl_Object<gpi_hdl_type>);
-    type.tp_repr = (reprfunc)gpi_hdl_repr<gpi_hdl_type>;
-    type.tp_hash = (hashfunc)gpi_hdl_hash<gpi_hdl_type>;
-    type.tp_flags = Py_TPFLAGS_DEFAULT;
-    type.tp_richcompare = gpi_hdl_richcompare<gpi_hdl_type>;
-    return type;
-}
-
-// these will be initialized later, once the members are all defined
+// these will be created in PyInit_simulator(), once the members are all
+// defined; only the declarations live here
 template <>
-PyTypeObject gpi_hdl_Object<gpi_sim_hdl>::py_type;
+PyTypeObject *gpi_hdl_Object<gpi_sim_hdl>::py_type;
 template <>
-PyTypeObject gpi_hdl_Object<gpi_iterator_hdl>::py_type;
+const char *gpi_hdl_Object<gpi_sim_hdl>::type_name;
 template <>
-PyTypeObject gpi_hdl_Object<gpi_cb_hdl>::py_type;
+PyTypeObject *gpi_hdl_Object<gpi_iterator_hdl>::py_type;
 template <>
-PyTypeObject gpi_hdl_Object<gpi_clk_hdl>::py_type;
+const char *gpi_hdl_Object<gpi_iterator_hdl>::type_name;
+template <>
+PyTypeObject *gpi_hdl_Object<gpi_cb_hdl>::py_type;
+template <>
+const char *gpi_hdl_Object<gpi_cb_hdl>::type_name;
+template <>
+PyTypeObject *gpi_hdl_Object<gpi_clk_hdl>::py_type;
+template <>
+const char *gpi_hdl_Object<gpi_clk_hdl>::type_name;
 }  // namespace
 
 typedef int (*gpi_function_t)(void *);
@@ -404,7 +414,7 @@ static PyObject *register_value_change_callback(
     }
 
     PyObject *pSigHdl = PyTuple_GetItem(args, 0);
-    if (Py_TYPE(pSigHdl) != &gpi_hdl_Object<gpi_sim_hdl>::py_type) {
+    if (Py_TYPE(pSigHdl) != gpi_hdl_Object<gpi_sim_hdl>::py_type) {
         PyErr_SetString(PyExc_TypeError, "First argument must be a sim_obj");
         return NULL;
     }
@@ -950,7 +960,7 @@ static PyObject *clock_create(PyObject *, PyObject *args) {
     // Extract the clock signal sim object
     PyObject *pSigHdl;
     if (!PyArg_ParseTuple(args, "O!:clock_create",
-                          &gpi_hdl_Object<gpi_sim_hdl>::py_type, &pSigHdl)) {
+                          gpi_hdl_Object<gpi_sim_hdl>::py_type, &pSigHdl)) {
         return NULL;
     }
     gpi_sim_hdl sim_hdl = ((gpi_hdl_Object<gpi_sim_hdl> *)pSigHdl)->hdl;
@@ -975,7 +985,7 @@ static void clock_dealloc(PyObject *self) {
         // LCOV_EXCL_STOP
     }
 
-    if (Py_TYPE(self) != &gpi_hdl_Object<gpi_clk_hdl>::py_type) {
+    if (Py_TYPE(self) != gpi_hdl_Object<gpi_clk_hdl>::py_type) {
         // LCOV_EXCL_START
         PyErr_SetString(PyExc_TypeError, "Wrong type for clock_dealloc!");
         return;
@@ -986,7 +996,13 @@ static void clock_dealloc(PyObject *self) {
 
     delete gpi_clk;
 
-    Py_TYPE(self)->tp_free((PyObject *)self);
+    // The type is a heap type created by PyType_FromSpec(), so its deallocator
+    // has to be looked up with PyType_GetSlot() (PyTypeObject internals are
+    // opaque in the stable ABI).
+    PyTypeObject *type = Py_TYPE(self);
+    auto tp_free =
+        reinterpret_cast<void (*)(void *)>(PyType_GetSlot(type, Py_tp_free));
+    tp_free(self);
 }
 
 static PyObject *clock_start(gpi_hdl_Object<gpi_clk_hdl> *self,
@@ -1068,28 +1084,28 @@ static int add_module_constants(PyObject *simulator) {
 static int add_module_types(PyObject *simulator) {
     PyObject *typ;
 
-    typ = (PyObject *)&gpi_hdl_Object<gpi_sim_hdl>::py_type;
+    typ = (PyObject *)gpi_hdl_Object<gpi_sim_hdl>::py_type;
     Py_INCREF(typ);
     if (PyModule_AddObject(simulator, "sim_obj", typ) < 0) {
         Py_DECREF(typ);
         return -1;
     }
 
-    typ = (PyObject *)&gpi_hdl_Object<gpi_cb_hdl>::py_type;
+    typ = (PyObject *)gpi_hdl_Object<gpi_cb_hdl>::py_type;
     Py_INCREF(typ);
     if (PyModule_AddObject(simulator, "sim_callback", typ) < 0) {
         Py_DECREF(typ);
         return -1;
     }
 
-    typ = (PyObject *)&gpi_hdl_Object<gpi_iterator_hdl>::py_type;
+    typ = (PyObject *)gpi_hdl_Object<gpi_iterator_hdl>::py_type;
     Py_INCREF(typ);
     if (PyModule_AddObject(simulator, "sim_obj_iterator", typ) < 0) {
         Py_DECREF(typ);
         return -1;
     }
 
-    typ = (PyObject *)&gpi_hdl_Object<gpi_clk_hdl>::py_type;
+    typ = (PyObject *)gpi_hdl_Object<gpi_clk_hdl>::py_type;
     Py_INCREF(typ);
     if (PyModule_AddObject(simulator, "cpp_clock", typ) < 0) {
         // LCOV_EXCL_START
@@ -1265,6 +1281,10 @@ static struct PyModuleDef moduledef = {PyModuleDef_HEAD_INIT,
                                        NULL,
                                        NULL};
 
+// Creates the four extension types; defined at the bottom of this file where
+// the method tables live.
+static bool create_gpi_hdl_types();
+
 #ifndef _WIN32
 // Only required for Python < 3.9, default for 3.9+ (bpo-11410)
 #pragma GCC visibility push(default)
@@ -1273,20 +1293,17 @@ PyMODINIT_FUNC PyInit_simulator(void);
 #endif
 
 PyMODINIT_FUNC PyInit_simulator(void) {
-    /* initialize the extension types */
-    if (PyType_Ready(&gpi_hdl_Object<gpi_sim_hdl>::py_type) < 0) {
-        return NULL;
-    }
-    if (PyType_Ready(&gpi_hdl_Object<gpi_cb_hdl>::py_type) < 0) {
-        return NULL;
-    }
-    if (PyType_Ready(&gpi_hdl_Object<gpi_iterator_hdl>::py_type) < 0) {
-        return NULL;
-    }
-    if (PyType_Ready(&gpi_hdl_Object<gpi_clk_hdl>::py_type) < 0) {
+    // Resolve the Python C API first; this library is not linked against
+    // libpython, every symbol comes from ::pygpi::api (see pyapi.hpp).
+    if (!pygpi::ensure_loaded()) {
         // LCOV_EXCL_START
         return NULL;
         // LCOV_EXCL_STOP
+    }
+
+    /* initialize the extension types */
+    if (!create_gpi_hdl_types()) {
+        return NULL;
     }
 
     PyObject *simulator = PyModule_Create(&moduledef);
@@ -1439,29 +1456,15 @@ static PyMethodDef sim_obj_methods[] = {
 
 // putting these at the bottom means that all the functions above are accessible
 template <>
-PyTypeObject gpi_hdl_Object<gpi_sim_hdl>::py_type = []() -> PyTypeObject {
-    auto type = fill_common_slots<gpi_sim_hdl>();
-    type.tp_name = "cocotb.simulator.sim_obj";
-    type.tp_doc =
-        "A simulation object that represents a GPI object handle.\n"
-        "\n"
-        "Contains methods for getting and setting the value of a GPI object, "
-        "and introspection of the object and design hierarchy.";
-    type.tp_methods = sim_obj_methods;
-    return type;
-}();
+PyTypeObject *gpi_hdl_Object<gpi_sim_hdl>::py_type = nullptr;
+template <>
+const char *gpi_hdl_Object<gpi_sim_hdl>::type_name = "cocotb.simulator.sim_obj";
 
 template <>
-PyTypeObject gpi_hdl_Object<gpi_iterator_hdl>::py_type = []() -> PyTypeObject {
-    auto type = fill_common_slots<gpi_iterator_hdl>();
-    type.tp_name = "cocotb.simulator.sim_obj_iterator";
-    type.tp_doc =
-        "A :term:`Python iterator <python:iterator>` that wraps a GPI iterator "
-        "handle.";
-    type.tp_iter = PyObject_SelfIter;
-    type.tp_iternext = (iternextfunc)iterator_next;
-    return type;
-}();
+PyTypeObject *gpi_hdl_Object<gpi_iterator_hdl>::py_type = nullptr;
+template <>
+const char *gpi_hdl_Object<gpi_iterator_hdl>::type_name =
+    "cocotb.simulator.sim_obj_iterator";
 
 static PyMethodDef sim_callback_methods[] = {
     {"deregister", WRAP((PyCFunction)deregister), METH_NOARGS,
@@ -1473,14 +1476,10 @@ static PyMethodDef sim_callback_methods[] = {
 };
 
 template <>
-PyTypeObject gpi_hdl_Object<gpi_cb_hdl>::py_type = []() -> PyTypeObject {
-    auto type = fill_common_slots<gpi_cb_hdl>();
-    type.tp_name = "cocotb.simulator.sim_callback";
-    type.tp_doc =
-        "A simulation callback object that manages a GPI callback handle.";
-    type.tp_methods = sim_callback_methods;
-    return type;
-}();
+PyTypeObject *gpi_hdl_Object<gpi_cb_hdl>::py_type = nullptr;
+template <>
+const char *gpi_hdl_Object<gpi_cb_hdl>::type_name =
+    "cocotb.simulator.sim_callback";
 
 static PyMethodDef cpp_clock_methods[] = {
     {"start", WRAP(clock_start), METH_VARARGS,
@@ -1514,15 +1513,101 @@ static PyMethodDef cpp_clock_methods[] = {
 };
 
 template <>
-PyTypeObject gpi_hdl_Object<gpi_clk_hdl>::py_type = []() -> PyTypeObject {
-    auto type = fill_common_slots<gpi_clk_hdl>();
-    type.tp_name = "cocotb.simulator.cpp_clock";
-    type.tp_doc =
+PyTypeObject *gpi_hdl_Object<gpi_clk_hdl>::py_type = nullptr;
+template <>
+const char *gpi_hdl_Object<gpi_clk_hdl>::type_name =
+    "cocotb.simulator.cpp_clock";
+
+/** Create a heap type for one of the GPI handle wrapper types.
+ *
+ * PyType_FromSpec() is used because static PyTypeObject definitions are not
+ * possible under Py_LIMITED_API. The optional slots are only appended when a
+ * non-null function is provided.
+ */
+template <typename gpi_hdl_type>
+static PyTypeObject *create_gpi_hdl_type(const char *doc, PyMethodDef *methods,
+                                         void *iter_slot = nullptr,
+                                         void *iternext_slot = nullptr,
+                                         void *dealloc_slot = nullptr) {
+    std::vector<PyType_Slot> slots = {
+        {Py_tp_repr, reinterpret_cast<void *>(gpi_hdl_repr<gpi_hdl_type>)},
+        {Py_tp_hash, reinterpret_cast<void *>(gpi_hdl_hash<gpi_hdl_type>)},
+        {Py_tp_richcompare,
+         reinterpret_cast<void *>(gpi_hdl_richcompare<gpi_hdl_type>)},
+        {Py_tp_doc, const_cast<void *>(static_cast<const void *>(doc))},
+    };
+    if (methods != nullptr) {
+        slots.push_back({Py_tp_methods, methods});
+    }
+    if (iter_slot != nullptr) {
+        slots.push_back({Py_tp_iter, iter_slot});
+    }
+    if (iternext_slot != nullptr) {
+        slots.push_back({Py_tp_iternext, iternext_slot});
+    }
+    if (dealloc_slot != nullptr) {
+        slots.push_back({Py_tp_dealloc, dealloc_slot});
+    }
+    // PyType_FromSpec() walks the slot array until it finds a zeroed entry,
+    // so a sentinel is mandatory; without it the conversion reads past the
+    // end of the vector.
+    slots.push_back({0, nullptr});
+
+    PyType_Spec spec = {
+        gpi_hdl_Object<gpi_hdl_type>::type_name,
+        static_cast<int>(sizeof(gpi_hdl_Object<gpi_hdl_type>)),
+        0,
+        static_cast<unsigned int>(Py_TPFLAGS_DEFAULT),
+        slots.data(),
+    };
+    return reinterpret_cast<PyTypeObject *>(PyType_FromSpec(&spec));
+}
+
+// Create the four extension types. Forward-declared before
+// PyInit_simulator(), which calls it once the module is being imported.
+static bool create_gpi_hdl_types() {
+    if (gpi_hdl_Object<gpi_sim_hdl>::py_type != nullptr &&
+        gpi_hdl_Object<gpi_iterator_hdl>::py_type != nullptr &&
+        gpi_hdl_Object<gpi_cb_hdl>::py_type != nullptr &&
+        gpi_hdl_Object<gpi_clk_hdl>::py_type != nullptr) {
+        // Already created, e.g. when the module is imported again.
+        return true;
+    }
+
+    gpi_hdl_Object<gpi_sim_hdl>::py_type = create_gpi_hdl_type<gpi_sim_hdl>(
+        "A simulation object that represents a GPI object handle.\n"
+        "\n"
+        "Contains methods for getting and setting the value of a GPI object, "
+        "and introspection of the object and design hierarchy.",
+        sim_obj_methods);
+
+    gpi_hdl_Object<gpi_iterator_hdl>::py_type =
+        create_gpi_hdl_type<gpi_iterator_hdl>(
+            "A :term:`Python iterator <python:iterator>` that wraps a GPI "
+            "iterator handle.",
+            nullptr, reinterpret_cast<void *>(PyObject_SelfIter),
+            reinterpret_cast<void *>(iterator_next));
+
+    gpi_hdl_Object<gpi_cb_hdl>::py_type = create_gpi_hdl_type<gpi_cb_hdl>(
+        "A simulation callback object that manages a GPI callback handle.",
+        sim_callback_methods);
+
+    gpi_hdl_Object<gpi_clk_hdl>::py_type = create_gpi_hdl_type<gpi_clk_hdl>(
         "A clock implemented in C++ that uses the GPI directly.\n"
         "\n"
         "The clock signal is driven without interacting with Python to "
-        "increase performance.";
-    type.tp_methods = cpp_clock_methods;
-    type.tp_dealloc = clock_dealloc;
-    return type;
-}();
+        "increase performance.",
+        cpp_clock_methods, nullptr, nullptr,
+        reinterpret_cast<void *>(clock_dealloc));
+
+    if (gpi_hdl_Object<gpi_sim_hdl>::py_type == nullptr ||
+        gpi_hdl_Object<gpi_iterator_hdl>::py_type == nullptr ||
+        gpi_hdl_Object<gpi_cb_hdl>::py_type == nullptr ||
+        gpi_hdl_Object<gpi_clk_hdl>::py_type == nullptr) {
+        // LCOV_EXCL_START
+        PYGPI_LOG_ERROR("Failed to create cocotb.simulator extension types");
+        return false;
+        // LCOV_EXCL_STOP
+    }
+    return true;
+}

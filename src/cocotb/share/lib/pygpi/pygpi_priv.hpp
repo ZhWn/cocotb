@@ -5,8 +5,12 @@
 #ifndef PY_GPI_LOGGING_H
 #define PY_GPI_LOGGING_H
 
-#include <Python.h>
+// Include pyapi.hpp rather than Python.h directly: it provides the Python
+// C API through the runtime symbol table in ::pygpi::api (no link-time
+// dependency on libpython, see pyapi.hpp).
 #include <gpi.h>
+
+#include "./pyapi.hpp"
 
 #ifdef PYGPI_EXPORTS
 #define PYGPI_EXPORT COCOTB_EXPORT

@@ -266,13 +266,22 @@ add_cocotb_library(simulator
         ${SHARE_LIB_DIR}/pygpi/bind.cpp
         ${SHARE_LIB_DIR}/pygpi/embed.cpp
         ${SHARE_LIB_DIR}/pygpi/logging.cpp
-    DEFINES PYGPI_EXPORTS
-    LIBRARIES gpi
+        ${SHARE_LIB_DIR}/pygpi/pyapi.cpp
+    # Compile against the stable ABI of the oldest supported Python so that
+    # only stable ABI symbols can be referenced (see pygpi/pyapi.hpp).
+    DEFINES PYGPI_EXPORTS Py_LIMITED_API=0x03090000
+    # dl provides dlopen()/dlsym() for pyapi.cpp on Unix. libpython is
+    # deliberately NOT linked: every Python C API symbol is resolved at
+    # runtime instead (see pygpi/pyapi.hpp).
+    LIBRARIES gpi ${GPI_LINK_LIBS}
     RC_LIBRARIES ""
 )
-# Python::Module links the import library on Windows and leaves Python
-# symbols unresolved on Unix (libpython is preloaded at runtime).
-target_link_libraries(simulator PRIVATE Python::Module)
+# Fail the link if any Python C API use was not redirected through the
+# runtime symbol table of pygpi/pyapi.hpp (macOS and Windows linkers reject
+# undefined symbols by default).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(simulator PRIVATE -Wl,--no-undefined)
+endif()
 
 if(SKBUILD_STATE STREQUAL "editable")
     set_target_properties(simulator PROPERTIES
