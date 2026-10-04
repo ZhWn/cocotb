@@ -16,6 +16,7 @@
 #include "../gpi_priv.hpp"
 #include "../logging.hpp"
 #include "_vendor/vpi/sv_vpi_user.h"
+#include "../abi/vpi_dispatch.hpp"
 
 #ifdef COCOTBVPI_EXPORTS
 #define COCOTBVPI_EXPORT COCOTB_EXPORT

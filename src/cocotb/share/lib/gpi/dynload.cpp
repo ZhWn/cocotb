@@ -4,71 +4,45 @@
 // Licensed under the Revised BSD License, see LICENSE for details.
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include <stdlib.h>
+// Symbol lookup for interfaces that are compiled into the interface
+// library as secondary interfaces. Their entry points are not linked
+// statically; instead they are resolved from the symbols the simulator
+// (or any of its modules) exports at runtime.
 
-#include "./logging.hpp"
+#include <stdlib.h>
 
 #ifdef _WIN32
 #include <windows.h>
+#include <psapi.h>
 #else
 #include <dlfcn.h>
 #endif
 
-void *utils_dyn_open(const char *lib_name) {
-    void *ret = NULL;
+void *utils_lookup_global_sym(const char *sym_name) {
 #ifdef _WIN32
-    SetErrorMode(0);
-    ret = static_cast<void *>(LoadLibrary(lib_name));
-    if (!ret) {
-        const char *log_fmt = "Unable to open lib '%s'%s%s";
-        LPSTR msg_ptr;
-        if (FormatMessageA(
-                FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER,
-                NULL, GetLastError(),
-                MAKELANGID(LANG_NEUTRAL, SUBLANG_SYS_DEFAULT), (LPSTR)&msg_ptr,
-                255, NULL)) {
-            LOG_ERROR(log_fmt, lib_name, ": ", msg_ptr);
-            LocalFree(msg_ptr);
-        } else {
-            LOG_ERROR(log_fmt, lib_name, "", "");
+    // The simulator's API may live in the executable or in one of the
+    // DLLs it loaded (see src/cocotb/share/def/*.def for the module
+    // each platform links against), so search every loaded module.
+    HMODULE modules[512];
+    DWORD needed = 0;
+    if (EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules),
+                           &needed)) {
+        DWORD count = needed / sizeof(HMODULE);
+        if (count > sizeof(modules) / sizeof(HMODULE)) {
+            count = sizeof(modules) / sizeof(HMODULE);
+        }
+        for (DWORD i = 0; i < count; i++) {
+            FARPROC sym = GetProcAddress(modules[i], sym_name);
+            if (sym) {
+                return reinterpret_cast<void *>(sym);
+            }
         }
     }
+    return NULL;
 #else
-    /* Clear status */
-    dlerror();
-
-    ret = dlopen(lib_name, RTLD_LAZY | RTLD_GLOBAL);
-    if (!ret) {
-        LOG_ERROR("Unable to open lib '%s': %s", lib_name, dlerror());
-    }
+    // The global scope is exactly what the loader used before this
+    // scheme to resolve the (previously) dynamically loaded interface
+    // libraries against.
+    return dlsym(RTLD_DEFAULT, sym_name);
 #endif
-    return ret;
-}
-
-void *utils_dyn_sym(void *handle, const char *sym_name) {
-    void *entry_point;
-#ifdef _WIN32
-    entry_point = reinterpret_cast<void *>(
-        GetProcAddress(static_cast<HMODULE>(handle), sym_name));
-    if (!entry_point) {
-        const char *log_fmt = "Unable to find symbol '%s'%s%s";
-        LPSTR msg_ptr;
-        if (FormatMessageA(
-                FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER,
-                NULL, GetLastError(),
-                MAKELANGID(LANG_NEUTRAL, SUBLANG_SYS_DEFAULT), (LPSTR)&msg_ptr,
-                255, NULL)) {
-            LOG_ERROR(log_fmt, sym_name, ": ", msg_ptr);
-            LocalFree(msg_ptr);
-        } else {
-            LOG_ERROR(log_fmt, sym_name, "", "");
-        }
-    }
-#else
-    entry_point = dlsym(handle, sym_name);
-    if (!entry_point) {
-        LOG_ERROR("Unable to find symbol '%s': %s", sym_name, dlerror());
-    }
-#endif
-    return entry_point;
 }

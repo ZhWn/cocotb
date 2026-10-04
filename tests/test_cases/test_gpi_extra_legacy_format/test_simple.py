@@ -6,5 +6,6 @@ from cocotb.triggers import Timer
 
 @cocotb.test()
 async def test_name_error(_):
-    # GPI init will fail, so the file contents don't really matter.
+    # GPI init rejects the legacy GPI_EXTRA format and exits, so the
+    # file contents don't really matter.
     await Timer(100, "ns")

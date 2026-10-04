@@ -63,7 +63,7 @@ Make Variables
 .. make:var:: VHDL_GPI_INTERFACE
 
     Explicitly sets the simulator interface to use when :make:var:`TOPLEVEL_LANG` is ``vhdl``.
-    This includes the initial GPI interface loaded, and :envvar:`GPI_EXTRA` library loaded in mixed language simulations.
+    This includes the primary GPI interface loaded, and the :envvar:`GPI_EXTRA` interface activated in mixed language simulations.
     Valid values are ``vpi``, ``vhpi``, or ``fli``.
     Not all simulators support all values; refer to the :ref:`simulator-support` section for details.
 

@@ -275,8 +275,15 @@ GPI_EXPORT void gpi_check_cleanup();
 GPI_EXPORT bool gpi_is_finalizing();
 GPI_EXPORT void gpi_init_logging_and_debug();
 
-void *utils_dyn_open(const char *lib_name);
-void *utils_dyn_sym(void *handle, const char *sym_name);
+/* Activation hook for a GPI interface compiled into this image but not
+ * statically active (requested by name through GPI_EXTRA). Registered
+ * by the interface's dispatch translation unit at library load time. */
+typedef void (*gpi_abi_activation)(void);
+GPI_EXPORT void gpi_register_abi(const char *name,
+                                 gpi_abi_activation activate);
+
+/* Look up a symbol exported by the simulator or one of its modules. */
+void *utils_lookup_global_sym(const char *sym_name);
 
 #define GPI_TO_USER_CB(impl) LOG_TRACE("[ " xstr(impl) " ] => User Callback")
 
@@ -290,8 +297,6 @@ void *utils_dyn_sym(void *handle, const char *sym_name);
         gpi_check_cleanup();                            \
         LOG_TRACE("[ " xstr(impl) " %p ] => Sim", ptr); \
     } while (0)
-
-typedef void (*layer_entry_func)();
 
 /* Use this macro in an implementation layer to define an entry point */
 #define GPI_ENTRY_POINT(NAME, func)                     \

@@ -4,10 +4,10 @@
 
 """Out-of-process IPC plumbing for cocotb.
 
-The simulator loads ``libcocotbipc``, which spawns ``python -m cocotb._ipc``
-as a child process and talks to it over this protocol. The simulator-side
-implementation lives in ``src/cocotb/share/lib/ipc``; this package is the
-client half.
+The simulator-side interface library embeds an IPC server, which spawns
+``python -m cocotb._ipc`` as a child process and talks to it over this
+protocol. The simulator-side implementation lives in
+``src/cocotb/share/lib/ipc``; this package is the client half.
 
 This package deliberately has no dependencies on the rest of cocotb so that
 it can be imported very early (and tested standalone with pytest).

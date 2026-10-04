@@ -15,7 +15,6 @@ this chapter shows the minimum settings to be done.
 
 For all simulators, the following environment variables need to be set:
 
-* Define :envvar:`GPI_USERS` using ``$(cocotb-config --pygpi-entry-point)``.
 * Define :envvar:`PYGPI_PYTHON_BIN` using ``$(cocotb-config --python-bin)``.
 * Define :envvar:`COCOTB_TEST_MODULES` with the name of the Python module(s) containing your testcases.
 
@@ -86,8 +85,7 @@ Aldec Riviera-PRO
       For a design with a VHDL toplevel, call ``asim`` with the option
       ``-loadvhpi $(cocotb-config --lib-entry vhpi riviera)``.
 
-      Set the :envvar:`GPI_EXTRA` environment variable to
-      ``$(cocotb-config --lib-name-path vpi riviera):cocotbvpi_entry_point``
+      Set the :envvar:`GPI_EXTRA` environment variable to ``vpi``
       if there are also (System)Verilog modules in the design.
 
    .. tab-item:: Design with a (System)Verilog Toplevel
@@ -95,8 +93,7 @@ Aldec Riviera-PRO
       For a design with a (System)Verilog toplevel, call ``alog`` and ``asim`` with the option
       ``-pli $(cocotb-config --lib-entry vpi riviera)``.
 
-      Set the :envvar:`GPI_EXTRA` environment variable to
-      ``$(cocotb-config --lib-name-path vhpi riviera):cocotbvhpi_entry_point``
+      Set the :envvar:`GPI_EXTRA` environment variable to ``vhpi``
       if there are also VHDL modules in the design.
 
 .. _custom-flows-activehdl:
@@ -113,8 +110,7 @@ Aldec Active-HDL
       For a design with a VHDL toplevel, call ``asim`` with the option
       ``-loadvhpi $(cocotb-config --lib-entry vhpi activehdl)``.
 
-      Set the :envvar:`GPI_EXTRA` environment variable to
-      ``$(cocotb-config --lib-name-path vpi activehdl):cocotbvpi_entry_point``
+      Set the :envvar:`GPI_EXTRA` environment variable to ``vpi``
       if there are also (System)Verilog modules in the design.
 
    .. tab-item:: Design with a (System)Verilog Toplevel
@@ -122,8 +118,7 @@ Aldec Active-HDL
       For a design with a (System)Verilog toplevel, call ``alog`` and ``asim`` with the option
       ``-pli $(cocotb-config --lib-entry vpi activehdl)``.
 
-      Set the :envvar:`GPI_EXTRA` environment variable to
-      ``$(cocotb-config --lib-name-path vhpi activehdl):cocotbvhpi_entry_point``
+      Set the :envvar:`GPI_EXTRA` environment variable to ``vhpi``
       if there are also VHDL modules in the design.
 
 .. _custom-flows-siemens:
@@ -140,8 +135,7 @@ Questa supports two different flows: the traditional flow using ``vsim``, which 
       For a design with a VHDL toplevel, call the ``vsim`` or ``qrun`` executable with the option
       ``-foreign "cocotb_init $(cocotb-config --lib-name-path fli questa)"``.
 
-      Set the :envvar:`GPI_EXTRA` environment variable to
-      ``$(cocotb-config --lib-name-path vpi questa):cocotbvpi_entry_point``
+      Set the :envvar:`GPI_EXTRA` environment variable to ``vpi``
       if there are also (System)Verilog modules in the design.
 
    .. tab-item:: Design with a (System)Verilog Toplevel
@@ -149,8 +143,8 @@ Questa supports two different flows: the traditional flow using ``vsim``, which 
       For a design with a (System)Verilog toplevel, call the ``vsim`` or ``qrun`` executable with the option
       ``-pli $(cocotb-config --lib-entry vpi questa)``.
 
-      Set the :envvar:`GPI_EXTRA` environment variable to
-      ``$(cocotb-config --lib-name-path fli questa):cocotbfli_entry_point``
+      Set the :envvar:`GPI_EXTRA` environment variable to ``vhpi`` or ``fli``
+      (whichever VHDL interface the design uses, ``fli`` by default)
       if there are also VHDL modules in the design.
 
 .. _custom-flows-cadence:
@@ -170,8 +164,7 @@ Cadence Incisive and Xcelium
   to simulation and it is the one to use to register callbacks. Specifying the entry point in ``elab_functions``
   works but has the downside of initializing cocotb during elaboration, not only simulation.
 
-* If the design contains any VHDL modules, set the :envvar:`GPI_EXTRA` environment variable to
-  ``$(cocotb-config --lib-name-path vhpi xcelium):cocotbvhpi_entry_point``.
+* If the design contains any VHDL modules, set the :envvar:`GPI_EXTRA` environment variable to ``vhpi``.
   This is because directly loading the VHPI library causes an error in Xcelium,
   so always load the VPI library and supply VHPI via ``GPI_EXTRA``.
 

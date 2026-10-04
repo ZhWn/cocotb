@@ -11,4 +11,6 @@ override_for_this_test:
 include ../../designs/sample_module/Makefile
 
 COCOTB_TEST_MODULES = test_simple
-unexport GPI_USERS
+# The legacy "path/to/lib.so:entry_point" GPI_EXTRA format must be
+# rejected loudly at GPI init.
+export GPI_EXTRA = /nonexistent/libfoo.so:cocotbvhpi_entry_point

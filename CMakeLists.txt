@@ -138,7 +138,13 @@ function(add_cocotb_library TARGET_NAME)
     set(multiValueArgs "SOURCES" "LIBRARIES" "DEFINES" "RC_LIBRARIES" "RC_RUNTIME_LIBRARIES")
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-    set(ALL_SOURCES ${ARG_SOURCES})
+    # Every interface library carries the static core (gpi + ipc) so
+    # exactly one library file is loaded per simulation run, plus the
+    # embedded package zip payload when enabled.
+    set(ALL_SOURCES ${ARG_SOURCES} $<TARGET_OBJECTS:cocotb_core>)
+    if(COCOTB_IPC_EMBED_ZIP)
+        list(APPEND ALL_SOURCES ${COCOTB_IPC_ZIP_PAYLOAD})
+    endif()
     if(WIN32)
         set(RC_FILENAME "${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}.rc")
         set(LIB_NAME ${ARG_OUTPUT_NAME})
@@ -199,7 +205,15 @@ function(add_cocotb_library TARGET_NAME)
     endif()
 
     target_include_directories(${TARGET_NAME} PRIVATE ${INCLUDE_DIRS})
-    target_compile_definitions(${TARGET_NAME} PRIVATE ${ARG_DEFINES} ${EXTRA_DEFINES})
+    # GPI_EXPORTS: gpi.h declarations must be dllexport/visible for
+    # same-image references (they are defined in cocotb_core). The
+    # three interface export macros are given for every library so
+    # secondary-interface translation units can define their exported
+    # symbols too (e.g. vhpi_startup_routines).
+    target_compile_definitions(${TARGET_NAME} PRIVATE
+        ${ARG_DEFINES} ${EXTRA_DEFINES}
+        GPI_EXPORTS COCOTBVPI_EXPORTS COCOTBVHPI_EXPORTS COCOTBFLI_EXPORTS
+    )
     target_compile_options(${TARGET_NAME} PRIVATE ${EXTRA_CXX_FLAGS})
 
     if(ARG_LIBRARIES)
@@ -208,6 +222,10 @@ function(add_cocotb_library TARGET_NAME)
 
     if(WIN32)
         target_compile_definitions(${TARGET_NAME} PRIVATE WIN32)
+        # ws2_32: IPC transport; psapi: cross-module symbol lookup.
+        target_link_libraries(${TARGET_NAME} PRIVATE ws2_32 psapi)
+    else()
+        target_link_libraries(${TARGET_NAME} PRIVATE dl)
     endif()
 
     if(NOT WIN32)
@@ -224,21 +242,62 @@ function(add_cocotb_library TARGET_NAME)
     endif()
 endfunction()
 
-set(GPI_LINK_LIBS "")
-if(UNIX)
-    list(APPEND GPI_LINK_LIBS dl)
-endif()
-
-add_cocotb_library(gpi
-    SOURCES
-        ${SHARE_LIB_DIR}/gpi/GpiCbHdl.cpp
-        ${SHARE_LIB_DIR}/gpi/GpiCommon.cpp
-        ${SHARE_LIB_DIR}/gpi/dynload.cpp
-        ${SHARE_LIB_DIR}/gpi/logging.cpp
-    DEFINES GPI_EXPORTS
-    LIBRARIES ${GPI_LINK_LIBS}
-    RC_LIBRARIES ""
+# Source lists for the simulator interface layers. Each interface
+# library compiles its primary interface from these statically and,
+# where a mixed-language flow needs it, additionally compiles other
+# interfaces in dispatch mode (see cocotb_add_dyn_interface below).
+set(COCOTB_VPI_SOURCES
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiImpl.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiObj.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiIterator.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiSignal.cpp
 )
+set(COCOTB_VHPI_SOURCES
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiImpl.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiObj.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiIterator.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiSignal.cpp
+)
+set(COCOTB_FLI_SOURCES
+    ${SHARE_LIB_DIR}/gpi/fli/FliImpl.cpp
+    ${SHARE_LIB_DIR}/gpi/fli/FliCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/fli/FliObjHdl.cpp
+)
+
+# Secondary-interface compile switches. Linking one of these interface
+# targets into an interface library compiles the matching ABI's sources
+# in dispatch mode for that library only: their simulator entry points
+# are resolved from the simulator's exports at runtime (dlsym /
+# GetProcAddress) instead of being linked statically.
+foreach(_cocotb_abi IN ITEMS vpi vhpi fli)
+    string(TOUPPER "${_cocotb_abi}" _cocotb_abi_upper)
+    add_library(cocotb_abi_${_cocotb_abi}_dyn INTERFACE)
+    target_compile_definitions(cocotb_abi_${_cocotb_abi}_dyn INTERFACE
+        COCOTB_${_cocotb_abi_upper}_DYN
+    )
+endforeach()
+
+# Append the sources and dispatch glue for secondary interface IFACE
+# to the source list OUTSRCS and the interface targets to OUTIFACES.
+macro(cocotb_add_dyn_interface OUTSRCS OUTIFACES IFACE)
+    if("${IFACE}" STREQUAL "vpi")
+        list(APPEND ${OUTSRCS} ${COCOTB_VPI_SOURCES}
+             ${SHARE_LIB_DIR}/gpi/abi/vpi_dispatch.cpp)
+        list(APPEND ${OUTIFACES} cocotb_abi_vpi_dyn)
+    elseif("${IFACE}" STREQUAL "vhpi")
+        list(APPEND ${OUTSRCS} ${COCOTB_VHPI_SOURCES}
+             ${SHARE_LIB_DIR}/gpi/abi/vhpi_dispatch.cpp)
+        list(APPEND ${OUTIFACES} cocotb_abi_vhpi_dyn)
+    elseif("${IFACE}" STREQUAL "fli")
+        list(APPEND ${OUTSRCS} ${COCOTB_FLI_SOURCES}
+             ${SHARE_LIB_DIR}/gpi/abi/fli_dispatch.cpp)
+        list(APPEND ${OUTIFACES} cocotb_abi_fli_dyn)
+    else()
+        message(FATAL_ERROR "Unknown secondary interface '${IFACE}'")
+    endif()
+endmacro()
 
 # Out-of-process IPC server: spawned as `python -m cocotb._ipc` by GPI and
 # drives the cocotb Python testbench over a local socket. Deliberately does
@@ -249,7 +308,7 @@ add_cocotb_library(gpi
 # packages are packed into a zip and embedded into the library so the
 # spawned child can import cocotb even without it being installed
 # (see tools/make_ipc_zip.py and the COCOTB_IPC_EMBED env var).
-option(COCOTB_IPC_EMBED_ZIP "Embed the cocotb Python package zip into libcocotbipc" OFF)
+option(COCOTB_IPC_EMBED_ZIP "Embed the cocotb Python package zip into the interface libraries" OFF)
 
 set(COCOTB_IPC_ZIP "")
 if(COCOTB_IPC_EMBED_ZIP)
@@ -294,47 +353,56 @@ if(COCOTB_IPC_EMBED_ZIP)
     endif()
 endif()
 
-add_cocotb_library(cocotbipc
-    SOURCES
-        ${SHARE_LIB_DIR}/ipc/codec_binary.cpp
-        ${SHARE_LIB_DIR}/ipc/codec_json.cpp
-        ${SHARE_LIB_DIR}/ipc/dispatcher.cpp
-        ${SHARE_LIB_DIR}/ipc/embed.cpp
-        ${SHARE_LIB_DIR}/ipc/ipc_protocol.cpp
-        ${SHARE_LIB_DIR}/ipc/ipc_tcp.cpp
-        ${SHARE_LIB_DIR}/ipc/ipc_zip.cpp
-        ${SHARE_LIB_DIR}/ipc/logging.cpp
-    DEFINES IPC_EXPORTS
-    LIBRARIES gpi
-    RC_LIBRARIES ""
+# Static core: GPI + IPC transport (+ embedded package zip when
+# enabled). Compiled once as an object library and linked into every
+# interface library. Deliberately does not link Python: the testbench
+# runs in a separate interpreter spawned over a local socket.
+add_library(cocotb_core OBJECT
+    ${SHARE_LIB_DIR}/gpi/GpiCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/GpiCommon.cpp
+    ${SHARE_LIB_DIR}/gpi/dynload.cpp
+    ${SHARE_LIB_DIR}/gpi/logging.cpp
+    ${SHARE_LIB_DIR}/ipc/codec_binary.cpp
+    ${SHARE_LIB_DIR}/ipc/codec_json.cpp
+    ${SHARE_LIB_DIR}/ipc/dispatcher.cpp
+    ${SHARE_LIB_DIR}/ipc/embed.cpp
+    ${SHARE_LIB_DIR}/ipc/ipc_protocol.cpp
+    ${SHARE_LIB_DIR}/ipc/ipc_tcp.cpp
+    ${SHARE_LIB_DIR}/ipc/ipc_zip.cpp
+    ${SHARE_LIB_DIR}/ipc/logging.cpp
 )
-
+target_include_directories(cocotb_core PRIVATE ${INCLUDE_DIRS})
+target_compile_definitions(cocotb_core PRIVATE
+    GPI_EXPORTS IPC_EXPORTS ${EXTRA_DEFINES}
+)
+target_compile_options(cocotb_core PRIVATE ${EXTRA_CXX_FLAGS})
+set_target_properties(cocotb_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(WIN32)
-    target_link_libraries(cocotbipc PRIVATE ws2_32)
+    target_compile_definitions(cocotb_core PRIVATE WIN32)
 endif()
 
 if(COCOTB_IPC_EMBED_ZIP)
     # Build the zip before compiling anything that embeds it.
     add_custom_target(cocotb_ipc_zip DEPENDS "${COCOTB_IPC_ZIP}")
-    add_dependencies(cocotbipc cocotb_ipc_zip)
-    target_compile_definitions(cocotbipc PRIVATE COCOTB_HAVE_EMBEDDED_ZIP=1)
+    target_compile_definitions(cocotb_core PRIVATE COCOTB_HAVE_EMBEDDED_ZIP=1)
 
     if(WIN32)
-        # Ship the zip as an RCDATA resource in the same generated .rc
-        # that already carries the manifest (forward slashes from the
-        # CMake path are valid for both rc.exe and windres). The rc is
-        # written at configure time; this rule only refreshes its
-        # timestamp when the zip changes so the resource recompiles.
-        set(_cocotb_zip_rc "${CMAKE_CURRENT_BINARY_DIR}/cocotbipc.rc")
-        file(APPEND "${_cocotb_zip_rc}"
-            "\n// Embedded cocotb package zip (tools/make_ipc_zip.py)\n"
-            "IDR_COCOTBIPCZIP RCDATA \"${COCOTB_IPC_ZIP}\"\n"
+        # Ship the zip as an RCDATA resource in a dedicated .rc that is
+        # compiled into every interface library (forward slashes from
+        # the CMake path are valid for both rc.exe and windres). The rc
+        # is written at configure time; the rule below only refreshes
+        # its timestamp when the zip changes so the resource recompiles.
+        set(COCOTB_IPC_ZIP_PAYLOAD "${CMAKE_CURRENT_BINARY_DIR}/cocotb_ipc_zip.rc")
+        file(WRITE "${COCOTB_IPC_ZIP_PAYLOAD}"
+            "// Generated by CMake: embedded cocotb package zip\n"
+            "// (tools/make_ipc_zip.py).\n"
+            "\"IDR_COCOTBIPCZIP\" RCDATA \"${COCOTB_IPC_ZIP}\"\n"
         )
         add_custom_command(
-            OUTPUT "${_cocotb_zip_rc}"
-            COMMAND ${CMAKE_COMMAND} -E touch "${_cocotb_zip_rc}"
+            OUTPUT "${COCOTB_IPC_ZIP_PAYLOAD}"
+            COMMAND ${CMAKE_COMMAND} -E touch "${COCOTB_IPC_ZIP_PAYLOAD}"
             DEPENDS "${COCOTB_IPC_ZIP}"
-            COMMENT "Refreshing cocotbipc.rc for the embedded zip"
+            COMMENT "Refreshing cocotb_ipc_zip.rc for the embedded zip"
             VERBATIM
         )
     else()
@@ -348,8 +416,8 @@ if(COCOTB_IPC_EMBED_ZIP)
             set(_cocotb_zip_sym "")
             set(_cocotb_zip_section ".section .rodata")
         endif()
-        set(COCOTB_IPC_ZIP_ASM "${CMAKE_CURRENT_BINARY_DIR}/cocotb_ipc_zip.s")
-        file(WRITE "${COCOTB_IPC_ZIP_ASM}"
+        set(COCOTB_IPC_ZIP_PAYLOAD "${CMAKE_CURRENT_BINARY_DIR}/cocotb_ipc_zip.s")
+        file(WRITE "${COCOTB_IPC_ZIP_PAYLOAD}"
             "/* Generated by CMake: embedded cocotb package zip. */\n"
             "${_cocotb_zip_section}\n"
             ".globl ${_cocotb_zip_sym}cocotb_zip_start\n"
@@ -359,42 +427,49 @@ if(COCOTB_IPC_EMBED_ZIP)
             "${_cocotb_zip_sym}cocotb_zip_end:\n"
         )
         if(NOT APPLE)
-            file(APPEND "${COCOTB_IPC_ZIP_ASM}"
+            file(APPEND "${COCOTB_IPC_ZIP_PAYLOAD}"
                 ".section .note.GNU-stack,\"\",@progbits\n")
         endif()
         # The .s content only names the zip, so refresh its timestamp
         # when the zip changes to force a re-assemble.
         add_custom_command(
-            OUTPUT "${COCOTB_IPC_ZIP_ASM}"
-            COMMAND ${CMAKE_COMMAND} -E touch "${COCOTB_IPC_ZIP_ASM}"
+            OUTPUT "${COCOTB_IPC_ZIP_PAYLOAD}"
+            COMMAND ${CMAKE_COMMAND} -E touch "${COCOTB_IPC_ZIP_PAYLOAD}"
             DEPENDS "${COCOTB_IPC_ZIP}"
             COMMENT "Refreshing cocotb_ipc_zip.s for the embedded zip"
             VERBATIM
         )
-        target_sources(cocotbipc PRIVATE "${COCOTB_IPC_ZIP_ASM}")
     endif()
 endif()
 
 function(add_vpi_library SIM_NAME SIM_DEFINE)
     set(options "")
     set(oneValueArgs "")
-    set(multiValueArgs "EXTRA_LIBS" "EXTRA_LIB_DIRS")
+    set(multiValueArgs "EXTRA_LIBS" "EXTRA_LIB_DIRS" "DYN_INTERFACES")
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     string(TOLOWER ${SIM_NAME} SIM_LOWER)
     set(TARGET_NAME cocotbvpi_${SIM_LOWER})
 
+    # Primary interface: linked statically. Secondary interfaces for
+    # mixed-language flows: compiled in dispatch mode (no static ABI
+    # references), activated at runtime via GPI_EXTRA.
+    set(ALL_SOURCES ${COCOTB_VPI_SOURCES})
+    set(DYN_IFACE_TARGETS "")
+    foreach(IFACE IN LISTS ARG_DYN_INTERFACES)
+        cocotb_add_dyn_interface(ALL_SOURCES DYN_IFACE_TARGETS ${IFACE})
+    endforeach()
+
     add_cocotb_library(${TARGET_NAME}
-        SOURCES
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiImpl.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiCbHdl.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiObj.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiIterator.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiSignal.cpp
-        DEFINES COCOTBVPI_EXPORTS ${SIM_DEFINE}
-        LIBRARIES gpi ${ARG_EXTRA_LIBS}
-        RC_LIBRARIES "gpi"
+        SOURCES ${ALL_SOURCES}
+        DEFINES ${SIM_DEFINE}
+        LIBRARIES ${ARG_EXTRA_LIBS}
+        RC_LIBRARIES ""
     )
+
+    if(DYN_IFACE_TARGETS)
+        target_link_libraries(${TARGET_NAME} PRIVATE ${DYN_IFACE_TARGETS})
+    endif()
 
     if(WIN32)
         target_link_directories(${TARGET_NAME} PRIVATE ${COCOTB_DEF_DIR})
@@ -416,23 +491,31 @@ endfunction()
 function(add_vhpi_library SIM_NAME SIM_DEFINE)
     set(options "")
     set(oneValueArgs "")
-    set(multiValueArgs "EXTRA_LIBS" "EXTRA_LIB_DIRS")
+    set(multiValueArgs "EXTRA_LIBS" "EXTRA_LIB_DIRS" "DYN_INTERFACES")
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     string(TOLOWER ${SIM_NAME} SIM_LOWER)
     set(TARGET_NAME cocotbvhpi_${SIM_LOWER})
 
+    # Primary interface: linked statically. Secondary interfaces for
+    # mixed-language flows: compiled in dispatch mode (no static ABI
+    # references), activated at runtime via GPI_EXTRA.
+    set(ALL_SOURCES ${COCOTB_VHPI_SOURCES})
+    set(DYN_IFACE_TARGETS "")
+    foreach(IFACE IN LISTS ARG_DYN_INTERFACES)
+        cocotb_add_dyn_interface(ALL_SOURCES DYN_IFACE_TARGETS ${IFACE})
+    endforeach()
+
     add_cocotb_library(${TARGET_NAME}
-        SOURCES
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiImpl.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiCbHdl.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiObj.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiIterator.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiSignal.cpp
-        DEFINES COCOTBVHPI_EXPORTS ${SIM_DEFINE}
-        LIBRARIES gpi ${ARG_EXTRA_LIBS}
-        RC_LIBRARIES "gpi"
+        SOURCES ${ALL_SOURCES}
+        DEFINES ${SIM_DEFINE}
+        LIBRARIES ${ARG_EXTRA_LIBS}
+        RC_LIBRARIES ""
     )
+
+    if(DYN_IFACE_TARGETS)
+        target_link_libraries(${TARGET_NAME} PRIVATE ${DYN_IFACE_TARGETS})
+    endif()
 
     if(WIN32)
         target_link_directories(${TARGET_NAME} PRIVATE ${COCOTB_DEF_DIR})
@@ -462,18 +545,25 @@ if(WIN32)
     set(MODELSIM_EXTRA_LIBS modelsim)
 endif()
 
-add_vpi_library(MODELSIM MODELSIM EXTRA_LIBS ${MODELSIM_EXTRA_LIBS})
-add_vhpi_library(MODELSIM MODELSIM EXTRA_LIBS ${MODELSIM_EXTRA_LIBS})
+# Mixed-language matrix: vpi-primary runs may need vhpi (mixed
+# VHDL+Verilog, VHDL_GPI_INTERFACE=vhpi) or fli (VHDL_GPI_INTERFACE=fli)
+# as secondary interfaces, so both are compiled in dispatch mode.
+add_vpi_library(MODELSIM MODELSIM DYN_INTERFACES vhpi fli
+    EXTRA_LIBS ${MODELSIM_EXTRA_LIBS})
+add_vhpi_library(MODELSIM MODELSIM DYN_INTERFACES vpi
+    EXTRA_LIBS ${MODELSIM_EXTRA_LIBS})
 
+# FLI-primary library: VPI secondary for mixed-language flows.
+set(COCOTB_FLI_TARGET_SOURCES ${COCOTB_FLI_SOURCES})
+set(COCOTB_FLI_DYN_TARGETS "")
+cocotb_add_dyn_interface(COCOTB_FLI_TARGET_SOURCES COCOTB_FLI_DYN_TARGETS vpi)
 add_cocotb_library(cocotbfli_modelsim
-    SOURCES
-        ${SHARE_LIB_DIR}/gpi/fli/FliImpl.cpp
-        ${SHARE_LIB_DIR}/gpi/fli/FliCbHdl.cpp
-        ${SHARE_LIB_DIR}/gpi/fli/FliObjHdl.cpp
-    DEFINES COCOTBFLI_EXPORTS
-    LIBRARIES gpi ${MODELSIM_EXTRA_LIBS}
-    RC_LIBRARIES "gpi"
+    SOURCES ${COCOTB_FLI_TARGET_SOURCES}
+    DEFINES ""
+    LIBRARIES ${MODELSIM_EXTRA_LIBS}
+    RC_LIBRARIES ""
 )
+target_link_libraries(cocotbfli_modelsim PRIVATE ${COCOTB_FLI_DYN_TARGETS})
 
 if(WIN32)
     target_link_directories(cocotbfli_modelsim PRIVATE ${COCOTB_DEF_DIR})
@@ -494,8 +584,8 @@ endif()
 add_vpi_library(GHDL GHDL EXTRA_LIBS ${GHDL_EXTRA_LIBS})
 
 if(UNIX)
-    add_vpi_library(IUS IUS)
-    add_vhpi_library(IUS IUS)
+    add_vpi_library(IUS IUS DYN_INTERFACES vhpi)
+    add_vhpi_library(IUS IUS DYN_INTERFACES vpi)
     add_vpi_library(VCS VCS)
     add_vpi_library(VERILATOR VERILATOR)
     add_vpi_library(DSim DSim)
@@ -511,8 +601,8 @@ set(ALDEC_EXTRA_LIBS "")
 if(WIN32)
     set(ALDEC_EXTRA_LIBS aldec)
 endif()
-add_vpi_library(ALDEC ALDEC EXTRA_LIBS ${ALDEC_EXTRA_LIBS})
-add_vhpi_library(ALDEC ALDEC EXTRA_LIBS ${ALDEC_EXTRA_LIBS})
+add_vpi_library(ALDEC ALDEC DYN_INTERFACES vhpi EXTRA_LIBS ${ALDEC_EXTRA_LIBS})
+add_vhpi_library(ALDEC ALDEC DYN_INTERFACES vpi EXTRA_LIBS ${ALDEC_EXTRA_LIBS})
 
 if(WIN32)
     if(MSVC)
@@ -550,8 +640,6 @@ if(WIN32)
 endif()
 
 if(SKBUILD AND NOT SKBUILD_STATE STREQUAL "editable")
-    install(TARGETS gpi cocotbipc DESTINATION cocotb/libs)
-
     set(SIM_TARGETS
         cocotbvpi_icarus cocotbvpi_modelsim cocotbvhpi_modelsim
         cocotbfli_modelsim cocotbvpi_ghdl cocotbvpi_aldec cocotbvhpi_aldec

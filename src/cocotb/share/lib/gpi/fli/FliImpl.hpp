@@ -14,6 +14,7 @@
 
 #include "../gpi_priv.hpp"
 #include "_vendor/fli/mti.h"
+#include "../abi/fli_dispatch.hpp"
 
 #ifdef COCOTBFLI_EXPORTS
 #define COCOTBFLI_EXPORT COCOTB_EXPORT

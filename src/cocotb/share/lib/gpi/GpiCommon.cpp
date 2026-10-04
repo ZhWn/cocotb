@@ -8,6 +8,7 @@
 #include <sys/types.h>
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <string>
 #include <utility>
@@ -95,7 +96,7 @@ bool gpi_has_registered_impl() { return registered_impls.size() > 0; }
 void gpi_start_of_sim_time() {
     for (auto &cb_info : start_of_sim_time_cbs) {
         // start_of_sime_time should never fail, this should be moved to
-        // gpi_load_users, as should the (argc,argv)
+        // gpi_entry_point, as should the (argc,argv)
         LOG_TRACE("[ GPI Start Sim ] => User Start callback");
         int error = cb_info.first(cb_info.second);
         LOG_TRACE("User Start callback => [ GPI Start Sim ]");
@@ -139,142 +140,120 @@ void gpi_check_cleanup(void) {
 
 bool gpi_is_finalizing(void) { return gpi_finalizing; }
 
-static void gpi_load_libs(std::vector<std::string> to_load) {
-    std::vector<std::string>::iterator iter;
-
-    for (iter = to_load.begin(); iter != to_load.end(); iter++) {
-        std::string arg = *iter;
-
-        auto const idx = arg.rfind(
-            ':');  // find from right since path could contain colons (Windows)
-        if (idx == std::string::npos) {
-            // no colon in the string
-            printf("cocotb: Error parsing GPI_EXTRA %s\n", arg.c_str());
-            exit(1);
-        }
-
-        std::string const lib_name = arg.substr(0, idx);
-        std::string const func_name = arg.substr(idx + 1, std::string::npos);
-
-        void *lib_handle = utils_dyn_open(lib_name.c_str());
-        if (!lib_handle) {
-            printf("cocotb: Error loading shared library %s\n",
-                   lib_name.c_str());
-            exit(1);
-        }
-
-        void *entry_point = utils_dyn_sym(lib_handle, func_name.c_str());
-        if (!entry_point) {
-            char const *fmt =
-                "cocotb: Unable to find entry point %s for shared library "
-                "%s\n%s";
-            char const *msg =
-                "        Perhaps you meant to use `,` instead of `:` to "
-                "separate library names, as this changed in cocotb 1.4?\n";
-            printf(fmt, func_name.c_str(), lib_name.c_str(), msg);
-            exit(1);
-        }
-
-        layer_entry_func new_lib_entry = (layer_entry_func)entry_point;
-        LOG_TRACE("[ GPI Init ] => Impl Init (%s)", arg.c_str());
-        new_lib_entry();
-        LOG_TRACE("Impl Init => [ GPI Init ]");
-    }
+// Registry of GPI interfaces that are compiled into this image but not
+// statically active. Their dispatch translation units self-register
+// here when the library is loaded; GPI_EXTRA then activates them by
+// name (e.g. "GPI_EXTRA=vhpi").
+static std::map<std::string, gpi_abi_activation> &gpi_abi_registry() {
+    static std::map<std::string, gpi_abi_activation> registry;
+    return registry;
 }
 
-static int gpi_load_users() {
-    auto users = getenv("GPI_USERS");
-    if (!users) {
-        LOG_ERROR("No GPI_USERS specified, exiting...");
-        return -1;
+static std::string gpi_abi_normalize(const std::string &name) {
+    std::string key = name;
+    for (auto &c : key) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
-    // I would have loved to use istringstream and getline, but it causes a
-    // compilation issue when compiling with newer GCCs against C++11.
-    std::string users_str = users;
-    std::string::size_type start_idx = 0;
-    bool done = false;
-    while (!done) {
-        auto next_delim = users_str.find(';', start_idx);
-        if (next_delim == std::string::npos) {
-            done = true;
-            next_delim = users_str.length();
-        }
-        auto user = users_str.substr(start_idx, next_delim - start_idx);
-        start_idx = next_delim + 1;
-
-        auto split_idx = user.rfind(',');
-
-        std::string lib_name;
-        std::string func_name;
-        if (split_idx == std::string::npos) {
-            lib_name = std::move(user);
-        } else {
-            lib_name = user.substr(0, split_idx);
-            func_name = user.substr(split_idx + 1, std::string::npos);
-        }
-
-        void *lib_handle = utils_dyn_open(lib_name.c_str());
-        if (!lib_handle) {
-            LOG_ERROR("Error loading library '%s'", lib_name.c_str());
-            gpi_finish();
-            return -1;
-        }
-
-        if (split_idx != std::string::npos) {
-            void *func_handle = utils_dyn_sym(lib_handle, func_name.c_str());
-            if (!func_handle) {
-                LOG_ERROR(
-                    "Error getting entry func '%s' from loaded library '%s'",
-                    func_name.c_str(), lib_name.c_str());
-                gpi_finish();
-                return -1;
-            }
-
-            LOG_INFO("Running entry func '%s' from loaded library '%s'",
-                     func_name.c_str(), lib_name.c_str());
-
-            auto entry_func = (void (*)(void))func_handle;
-            LOG_TRACE("[ GPI Init ] => User Init (%s:%s)", lib_name.c_str(),
-                      func_name.c_str());
-            entry_func();
-            LOG_TRACE("User Init => [ GPI Init ]");
-        } else {
-            LOG_INFO("Loaded entry library: '%s'", lib_name.c_str());
-        }
-    }
-
-    return 0;
+    return key;
 }
+
+void gpi_register_abi(const char *name, gpi_abi_activation activate) {
+    gpi_abi_registry()[gpi_abi_normalize(name)] = activate;
+}
+
+static bool gpi_abi_name_is_valid(const std::string &name) {
+    if (name.empty()) {
+        return false;
+    }
+    for (char c : name) {
+        if (!std::islower(static_cast<unsigned char>(c)) &&
+            !std::isdigit(static_cast<unsigned char>(c)) && c != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The IPC server embedded in this image (ipc/embed.cpp): starts the
+// transport and spawns the Python testbench child process. Since the
+// core is statically linked into the interface library this is a
+// direct call; the GPI_USERS mechanism that dlopened it is gone.
+extern "C" void cocotb_ipc_start(void);
 
 void gpi_entry_point() {
     LOG_TRACE("=> [ GPI Init ]");
 
-    /* Lets look at what other libs we were asked to load too */
-    char *lib_env = getenv("GPI_EXTRA");
+    /* Secondary interfaces for this run, as a plain list of interface
+     * names compiled into this library (e.g. "GPI_EXTRA=vhpi"). */
+    char *abi_env = getenv("GPI_EXTRA");
+    if (abi_env && *abi_env) {
+        std::string abi_list = abi_env;
+        size_t pos = 0;
+        while (pos < abi_list.length()) {
+            size_t e_pos = abi_list.find(',', pos);
+            if (e_pos == std::string::npos) {
+                e_pos = abi_list.length();
+            }
+            std::string entry = abi_list.substr(pos, e_pos - pos);
+            pos = e_pos + 1;
 
-    if (lib_env) {
-        std::string lib_list = lib_env;
-        std::string const delim = ",";
-        std::vector<std::string> to_load;
+            auto b = entry.find_first_not_of(" \t");
+            if (b == std::string::npos) {
+                continue;
+            }
+            entry = entry.substr(b, entry.find_last_not_of(" \t") - b + 1);
 
-        size_t e_pos = 0;
-        while (std::string::npos != (e_pos = lib_list.find(delim))) {
-            std::string lib = lib_list.substr(0, e_pos);
-            lib_list.erase(0, e_pos + delim.length());
+            std::string name = gpi_abi_normalize(entry);
+            if (!gpi_abi_name_is_valid(name)) {
+                printf("cocotb: Error parsing GPI_EXTRA entry '%s'\n",
+                       entry.c_str());
+                printf(
+                    "        GPI_EXTRA is a comma-separated list of GPI "
+                    "interface names compiled\n"
+                    "        into the loaded library, for example "
+                    "\"GPI_EXTRA=vhpi\". The former\n"
+                    "        \"path/to/library.so:entry_point\" format is "
+                    "no longer supported.\n");
+                exit(1);
+            }
 
-            to_load.push_back(lib);
+            auto it = gpi_abi_registry().find(name);
+            if (it == gpi_abi_registry().end()) {
+                printf("cocotb: GPI_EXTRA requests interface '%s', which is "
+                       "not available in\n"
+                       "        this library.\n",
+                       name.c_str());
+                if (gpi_abi_registry().empty()) {
+                    printf("        This library provides no secondary "
+                           "interfaces; it supports a single language "
+                           "only.\n");
+                } else {
+                    std::string available;
+                    for (const auto &abi : gpi_abi_registry()) {
+                        if (!available.empty()) {
+                            available += ", ";
+                        }
+                        available += abi.first;
+                    }
+                    printf("        Secondary interfaces available in this "
+                           "library: %s\n",
+                           available.c_str());
+                }
+                exit(1);
+            }
+
+            LOG_TRACE("[ GPI Init ] => Activate interface (%s)", name.c_str());
+            it->second();
+            LOG_TRACE("Activate interface => [ GPI Init ]");
         }
-        if (lib_list.length()) {
-            to_load.push_back(lib_list);
-        }
-
-        gpi_load_libs(to_load);
     }
 
-    // Load users
-    if (gpi_load_users()) {
-        return;
+    if (getenv("GPI_USERS")) {
+        printf("cocotb: GPI_USERS is no longer supported; the cocotb "
+               "testbench process is started automatically.\n");
     }
+
+    cocotb_ipc_start();
 
     gpi_print_registered_impl();
 

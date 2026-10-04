@@ -91,8 +91,8 @@ def _help_vars_text() -> str:
 
         GPI
         ---
-        GPI_USERS         List of user libraries to load after GPI is initialized
-        GPI_EXTRA         Extra libraries to load as part of GPI initialization
+        GPI_EXTRA         Comma-separated list of secondary GPI interfaces to
+                          activate (mixed-language simulation), e.g. "vhpi"
         GPI_LOG_LEVEL     Default logging level for "gpi" loggers (default INFO)
         GPI_DEBUG         Enable GPI debug features, including TRACE log output
 
@@ -105,27 +105,6 @@ def _help_vars_text() -> str:
         For details, see {}"""
     ).format(doclink)
     return helpmsg
-
-
-def pygpi_entry_point() -> str:
-    """Return the GPI user entry that starts the cocotb IPC server.
-
-    GPI dlopens this library and calls its ``initialize`` symbol at
-    simulation start; the library then spawns the Python testbench process.
-    """
-    if os.name == "nt":
-        lib_ext = ".dll"
-    else:
-        lib_ext = ".so"
-
-    # check if compiled with msvc (no "lib" prefix), mirroring lib_name_path
-    if (libs_dir / "gpi.dll").is_file():
-        lib_prefix = ""
-    else:
-        lib_prefix = "lib"
-
-    lib_path = libs_dir / f"{lib_prefix}cocotbipc{lib_ext}"
-    return f"{lib_path.as_posix()},initialize"
 
 
 def lib_name_path(interface: str, simulator: str) -> Path:
@@ -175,8 +154,9 @@ def lib_name_path(interface: str, simulator: str) -> Path:
     else:
         lib_ext = ".so"
 
-    # check if compiled with msvc
-    if (libs_dir / "gpi.dll").is_file():
+    # check if compiled with msvc (no "lib" prefix); MinGW and
+    # Unix builds keep the "lib" prefix
+    if os.name == "nt" and any(libs_dir.glob("cocotb*.dll")):
         lib_prefix = ""
     else:
         lib_prefix = "lib"
@@ -257,11 +237,6 @@ def _get_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the version of cocotb",
     )
-    group.add_argument(
-        "--pygpi-entry-point",
-        action="store_true",
-        help="Print the GPI user entry (cocotb IPC server library) for use in GPI_USERS",
-    )
 
     return parser
 
@@ -284,8 +259,6 @@ def main() -> None:
         print(lib_name_path(*args.lib_name_path).as_posix())
     elif args.lib_entry:
         print(lib_entry(*args.lib_entry))
-    elif args.pygpi_entry_point:
-        print(pygpi_entry_point())
     elif args.version:
         print(_get_version())
 

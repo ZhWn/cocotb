@@ -92,12 +92,8 @@ endif
 
 endif
 
-# GPI loads the cocotb IPC server library (which spawns the Python testbench
-# process) unless the user provides their own list of GPI users.
-ifndef GPI_USERS
-GPI_USERS := $(shell $(PYTHON_BIN) -m cocotb_tools.config --pygpi-entry-point)
-endif
-export GPI_USERS
+# The cocotb IPC server (which spawns the Python testbench process) is
+# embedded in the interface library and started automatically.
 
 define check_vhdl_sources
 if [ "$(VHDL_SOURCES_$(LIB))" == "" ]; then \

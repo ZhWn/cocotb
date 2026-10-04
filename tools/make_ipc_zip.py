@@ -1,11 +1,11 @@
 # Copyright cocotb contributors
 # Licensed under the Revised BSD License, see LICENSE for details.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Build the cocotb package zip embedded into the IPC server library.
+"""Build the cocotb package zip embedded into the interface libraries.
 
-The zip produced here is embedded into ``libcocotbipc`` at build time
-(see the ``COCOTB_IPC_EMBED_ZIP`` CMake option). At simulation start the
-IPC server materializes it as a file in the system temp directory and
+The zip produced here is embedded into every interface library at build
+time (see the ``COCOTB_IPC_EMBED_ZIP`` CMake option). At simulation start
+the IPC server materializes it as a file in the system temp directory and
 appends its path to ``PYTHONPATH`` for the spawned Python child, so the
 testbench can import ``cocotb`` even when no copy is installed in the
 child's environment. Resolution order for the child is therefore:

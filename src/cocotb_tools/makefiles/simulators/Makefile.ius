@@ -42,8 +42,8 @@ ifneq (,$(findstring timescale,$(EXTRA_ARGS)))
     $(error Please use COCOTB_HDL_TIMEUNIT and COCOTB_HDL_TIMEPRECISION to specify timescale.)
 endif
 
-# Loading the VHPI library causes an error, so we always load the VPI library and supply
-# GPI_EXTRA=$(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vhpi ius) if needed.
+# Loading the VHPI library causes an error, so we always load the VPI library and
+# activate VHPI via GPI_EXTRA=vhpi when needed.
 
 # Xcelium will use default vlog_startup_routines symbol only if vpi library name is libvpi.so
 GPI_ARGS = -loadvpi $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-entry vpi ius)
@@ -54,10 +54,10 @@ ifeq ($(TOPLEVEL_LANG),verilog)
     ROOT_LEVEL = $(COCOTB_TOPLEVEL)
 ifneq ($(VHDL_SOURCES),)
     HDL_SOURCES += $(VHDL_SOURCES)
-    GPI_EXTRA = $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vhpi ius):cocotbvhpi_entry_point
+    GPI_EXTRA = vhpi
 endif
 else ifeq ($(TOPLEVEL_LANG),vhdl)
-    GPI_EXTRA = $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vhpi ius):cocotbvhpi_entry_point
+    GPI_EXTRA = vhpi
     EXTRA_ARGS += -v93
     EXTRA_ARGS += -top $(COCOTB_TOPLEVEL)
 ifdef RTL_LIBRARY

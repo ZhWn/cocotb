@@ -1,0 +1,1 @@
+Remove support for loading arbitrary libraries through ``GPI_USERS`` and the ``cocotb-config --pygpi-entry-point`` option used to construct it; the cocotb testbench process is started automatically from the embedded IPC server, and a set ``GPI_USERS`` is ignored with a warning.

@@ -277,19 +277,14 @@ class Runner(ABC):
 
         self.env.update(os.environ)
 
-        gpi_users: list[str] = []
-
         # TODO the following line reappends the path on every call to build() or test(). This needs to not be an attribute.
         # Most of the stuff on this class really shouldn't be an attribute, but that's a non-trivial and API-breaking refactor.
         self.env["PATH"] += os.pathsep + str(cocotb_tools.config.libs_dir)
         self.env["PYTHONPATH"] = os.pathsep.join(sys.path)
         self.env["PYGPI_PYTHON_BIN"] = sys.executable
-        if "GPI_USERS" not in self.env:
-            # GPI user that starts the cocotb IPC server (spawns the Python
-            # testbench process). The testbench is a child process now, so
-            # no libpython is preloaded into the simulator.
-            gpi_users.append(cocotb_tools.config.pygpi_entry_point())
-            self.env["GPI_USERS"] = ";".join(gpi_users)
+        # The cocotb IPC server is embedded in the interface library and
+        # started automatically; no GPI_USERS is needed (the testbench is
+        # a child process, so no libpython is preloaded into the simulator).
 
     def _set_env_build(self) -> None:
         self._set_env_common()
@@ -1164,16 +1159,9 @@ class Questa(Runner):
             ]
         )
 
-        gpi_extra_list = []
-        for gpi_if in self.gpi_interfaces[1:]:
-            gpi_if_lib_path = cocotb_tools.config.lib_name_path(gpi_if, "questa")
-            if gpi_if_lib_path.is_file():
-                gpi_extra_list.append(
-                    gpi_if_lib_path.as_posix() + f":cocotb{gpi_if}_entry_point"
-                )
-            else:
-                raise RuntimeError(f"{gpi_if_lib_path} library not found.")
-        self.env["GPI_EXTRA"] = ",".join(gpi_extra_list)
+        # Secondary interfaces are compiled into the primary interface
+        # library; GPI_EXTRA just names them.
+        self.env["GPI_EXTRA"] = ",".join(self.gpi_interfaces[1:])
 
         return cmds
 
@@ -1376,16 +1364,9 @@ class QuestaQIS(Runner):
             ]
         )
 
-        gpi_extra_list = []
-        for gpi_if in self.gpi_interfaces[1:]:
-            gpi_if_lib_path = cocotb_tools.config.lib_name_path(gpi_if, "questa")
-            if gpi_if_lib_path.is_file():
-                gpi_extra_list.append(
-                    gpi_if_lib_path.as_posix() + f":cocotb{gpi_if}_entry_point"
-                )
-            else:
-                raise RuntimeError(f"{gpi_if_lib_path} library not found.")
-        self.env["GPI_EXTRA"] = ",".join(gpi_extra_list)
+        # Secondary interfaces are compiled into the primary interface
+        # library; GPI_EXTRA just names them.
+        self.env["GPI_EXTRA"] = ",".join(self.gpi_interfaces[1:])
 
         return cmds
 
@@ -1720,10 +1701,7 @@ class AldecBase(Runner):
                 PLUSARGS=" ".join(_as_tcl_value(v) for v in self.plusargs),
             )
 
-            self.env["GPI_EXTRA"] = (
-                cocotb_tools.config.lib_entry("vpi", "riviera")
-                + ":cocotbvpi_entry_point"
-            )
+            self.env["GPI_EXTRA"] = "vpi"
         else:
             do_script += "asim +access +w_nets -interceptcoutput -pli {EXT_NAME} {EXTRA_ARGS} {TOPLEVEL} {PLUSARGS} \n".format(
                 TOPLEVEL=_as_tcl_value(
@@ -1739,10 +1717,7 @@ class AldecBase(Runner):
                 PLUSARGS=" ".join(_as_tcl_value(v) for v in self.plusargs),
             )
 
-            self.env["GPI_EXTRA"] = (
-                cocotb_tools.config.lib_name_path("vhpi", "riviera").as_posix()
-                + ":cocotbvhpi_entry_point"
-            )
+            self.env["GPI_EXTRA"] = "vhpi"
 
         do_script = self._append_pre_cmd(do_script)
 
@@ -2154,10 +2129,7 @@ class Xcelium(Runner):
                 *self._get_sim_cmd_suffix(),
             ]
         ]
-        self.env["GPI_EXTRA"] = (
-            cocotb_tools.config.lib_name_path("vhpi", "xcelium").as_posix()
-            + ":cocotbvhpi_entry_point"
-        )
+        self.env["GPI_EXTRA"] = "vhpi"
 
         return cmds
 

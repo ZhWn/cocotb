@@ -1,7 +1,7 @@
 # Copyright cocotb contributors
 # Licensed under the Revised BSD License, see LICENSE for details.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Tests for tools/make_ipc_zip.py, the zip embedded into libcocotbipc."""
+"""Tests for tools/make_ipc_zip.py, the zip embedded into the interface libraries."""
 
 from __future__ import annotations
 

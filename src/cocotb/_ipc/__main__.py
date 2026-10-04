@@ -4,10 +4,11 @@
 
 """Entry point for the Python child process: ``python -m cocotb._ipc``.
 
-The simulator-side IPC server (``libcocotbipc``) spawns this module at
-simulation start. It connects back to the server, performs the handshake,
-then serves simulator events until the connection is closed, at which point
-the process exits (and is reaped by the simulator).
+The simulator-side IPC server (embedded in the GPI interface library)
+spawns this module at simulation start. It connects back to the server,
+performs the handshake, then serves simulator events until the connection
+is closed, at which point the process exits (and is reaped by the
+simulator).
 """
 
 from __future__ import annotations

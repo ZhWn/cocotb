@@ -8,8 +8,8 @@
 // implementing `cocotb.simulator`, supervises it, and drives it over the IPC
 // connection.
 //
-// The GPI_USERS entry point `initialize` is loaded by the GPI layer after the
-// simulator interface library has been registered. It:
+// The GPI layer calls `cocotb_ipc_start` after the simulator interface
+// library has been registered. It:
 //   1. starts the IPC transport (a loopback TCP server),
 //   2. spawns the Python child process (`PYGPI_PYTHON_BIN -m cocotb._ipc`),
 //   3. completes a hello/ready handshake with it,
@@ -860,7 +860,7 @@ void attach_pause() {
 
 }  // namespace
 
-extern "C" IPC_EXPORT void initialize(void) {
+extern "C" IPC_EXPORT void cocotb_ipc_start(void) {
     cocotb::ipc::ipc_debug_enabled =
         (getenv("COCOTB_IPC_DEBUG") != nullptr) ||
         (getenv("PYGPI_DEBUG") != nullptr);

@@ -6,5 +6,5 @@ from cocotb.triggers import Timer
 
 @cocotb.test()
 async def test_name_error(_):
-    # GPI init will fail, so the file contents don't really matter.
+    # A leftover GPI_USERS must not interfere with startup.
     await Timer(100, "ns")
