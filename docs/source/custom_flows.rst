@@ -41,7 +41,7 @@ Verilator
       --vpi --prefix Vtop \
       -LDFLAGS "-Wl,-rpath,$(cocotb-config --lib-dir) \
           -L$(cocotb-config --lib-dir) \
-          -lcocotbvpi_verilator" \
+          -lcocotb_verilator" \
       $(cocotb-config --share)/lib/verilator/verilator.cpp
 
 * Run Verilator's makefile as follows: ``CPPFLAGS="-std=c++11" make -f Vtop.mk``

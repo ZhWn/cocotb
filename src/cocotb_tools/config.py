@@ -117,7 +117,12 @@ def pygpi_entry_point() -> str:
 
 def lib_name_path(interface: str, simulator: str) -> Path:
     """
-    Return the absolute path of interface library for given interface (VPI/VHPI/FLI) and simulator
+    Return the absolute path of the cocotb library for the given interface (VPI/VHPI/FLI) and simulator.
+
+    The library of a simulator family carries every interface its
+    simulator's flows can use, so the path is the same for all interfaces
+    of a simulator; ``interface`` only selects the entry function in
+    :func:`lib_entry`.
     """
 
     interface_name = interface.lower()
@@ -168,7 +173,7 @@ def lib_name_path(interface: str, simulator: str) -> Path:
     else:
         lib_prefix = "lib"
 
-    lib_name = f"{lib_prefix}cocotb{interface_name}_{library_name}{lib_ext}"
+    lib_name = f"{lib_prefix}cocotb_{library_name}{lib_ext}"
     return libs_dir / lib_name
 
 
@@ -234,13 +239,13 @@ def _get_parser() -> argparse.ArgumentParser:
     )
     group.add_argument(
         "--lib-name-path",
-        help="Print the absolute path of interface library for given interface (VPI/VHPI/FLI) and simulator",
+        help="Print the absolute path of the cocotb library carrying the given interface (VPI/VHPI/FLI) for the given simulator",
         nargs=2,
         metavar=("INTERFACE", "SIMULATOR"),
     )
     group.add_argument(
         "--lib-entry",
-        help="Print the interface library and, when required, its entry function for given interface (VPI/VHPI/FLI) and simulator",
+        help="Print the cocotb library and, when required, its entry function for the given interface (VPI/VHPI/FLI) and simulator",
         nargs=2,
         metavar=("INTERFACE", "SIMULATOR"),
     )

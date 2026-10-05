@@ -1952,7 +1952,7 @@ class Verilator(Runner):
                 "-o",
                 self.hdl_toplevel,
                 "-LDFLAGS",
-                f"-Wl,-rpath,{cocotb_tools.config.libs_dir} -L{cocotb_tools.config.libs_dir} -lcocotbvpi_verilator",
+                f"-Wl,-rpath,{cocotb_tools.config.libs_dir} -L{cocotb_tools.config.libs_dir} -lcocotb_verilator",
             ]
             + (["--trace"] if self.waves else [])
             + [arg.value for arg in self._build_args]

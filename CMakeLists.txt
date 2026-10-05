@@ -303,95 +303,78 @@ set_target_properties(simulator PROPERTIES
     SUFFIX ${PYTHON_EXT_SUFFIX}
 )
 
-function(add_vpi_library SIM_NAME SIM_DEFINE)
-    string(TOLOWER ${SIM_NAME} SIM_LOWER)
-    set(TARGET_NAME cocotbvpi_${SIM_LOWER})
-
-    add_cocotb_library(${TARGET_NAME}
-        SOURCES
-            ${SHARE_LIB_DIR}/gpi/abi/vpi_dispatch.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiImpl.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiCbHdl.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiObj.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiIterator.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiSignal.cpp
-        DEFINES COCOTBVPI_EXPORTS COCOTB_VPI_DYN ${SIM_DEFINE}
-        LIBRARIES gpi
-        RC_LIBRARIES "gpi"
-    )
-
-    # Fail the link if the interface library still references a simulator ABI
-    # symbol statically instead of resolving it at runtime through the
-    # dispatch table (macOS and Windows linkers reject undefined symbols by
-    # default).
-    if(NOT WIN32 AND NOT APPLE)
-        target_link_options(${TARGET_NAME} PRIVATE -Wl,--no-undefined)
-    endif()
-endfunction()
-
-function(add_vhpi_library SIM_NAME SIM_DEFINE)
-    string(TOLOWER ${SIM_NAME} SIM_LOWER)
-    set(TARGET_NAME cocotbvhpi_${SIM_LOWER})
-
-    add_cocotb_library(${TARGET_NAME}
-        SOURCES
-            ${SHARE_LIB_DIR}/gpi/abi/vhpi_dispatch.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiImpl.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiCbHdl.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiObj.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiIterator.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiSignal.cpp
-        DEFINES COCOTBVHPI_EXPORTS COCOTB_VHPI_DYN ${SIM_DEFINE}
-        LIBRARIES gpi
-        RC_LIBRARIES "gpi"
-    )
-
-    # Fail the link if the interface library still references a simulator ABI
-    # symbol statically instead of resolving it at runtime through the
-    # dispatch table (macOS and Windows linkers reject undefined symbols by
-    # default).
-    if(NOT WIN32 AND NOT APPLE)
-        target_link_options(${TARGET_NAME} PRIVATE -Wl,--no-undefined)
-    endif()
-endfunction()
-
-add_vpi_library(ICARUS ICARUS)
-
-add_vpi_library(MODELSIM MODELSIM)
-add_vhpi_library(MODELSIM MODELSIM)
-
-add_cocotb_library(cocotbfli_modelsim
-    SOURCES
-        ${SHARE_LIB_DIR}/gpi/abi/fli_dispatch.cpp
-        ${SHARE_LIB_DIR}/gpi/fli/FliImpl.cpp
-        ${SHARE_LIB_DIR}/gpi/fli/FliCbHdl.cpp
-        ${SHARE_LIB_DIR}/gpi/fli/FliObjHdl.cpp
-    DEFINES COCOTBFLI_EXPORTS COCOTB_FLI_DYN
-    LIBRARIES gpi
-    RC_LIBRARIES "gpi"
+# Compilation units for each GPI interface family. A simulator family
+# library compiles every interface its simulator's flows use into a single
+# shared library, so exactly one cocotb library file is loaded per run.
+set(COCOTB_VPI_SOURCES
+    ${SHARE_LIB_DIR}/gpi/abi/vpi_dispatch.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiImpl.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiObj.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiIterator.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiSignal.cpp
 )
 
-# Fail the link if the interface library still references a simulator ABI
-# symbol statically instead of resolving it at runtime through the dispatch
-# table (macOS and Windows linkers reject undefined symbols by default).
-if(NOT WIN32 AND NOT APPLE)
-    target_link_options(cocotbfli_modelsim PRIVATE -Wl,--no-undefined)
-endif()
+set(COCOTB_VHPI_SOURCES
+    ${SHARE_LIB_DIR}/gpi/abi/vhpi_dispatch.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiImpl.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiObj.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiIterator.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiSignal.cpp
+)
 
-add_vpi_library(GHDL GHDL)
+set(COCOTB_FLI_SOURCES
+    ${SHARE_LIB_DIR}/gpi/abi/fli_dispatch.cpp
+    ${SHARE_LIB_DIR}/gpi/fli/FliImpl.cpp
+    ${SHARE_LIB_DIR}/gpi/fli/FliCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/fli/FliObjHdl.cpp
+)
+
+# Build the library of one simulator family, named cocotb_<family>, carrying
+# every GPI interface (VPI/VHPI/FLI) the simulator's flows can use. Each
+# interface contributes its sources, export defines and dispatch-table
+# activation define; SIM_DEFINE is the compile-time simulator switch shared
+# by all of the family's sources.
+function(add_family_library FAMILY SIM_DEFINE)
+    cmake_parse_arguments(PARSE_ARGV 2 ARG "" "" "INTERFACES")
+
+    set(TARGET_NAME cocotb_${FAMILY})
+    set(SOURCES "")
+    set(DEFINES ${SIM_DEFINE})
+    foreach(IFACE IN LISTS ARG_INTERFACES)
+        list(APPEND SOURCES ${COCOTB_${IFACE}_SOURCES})
+        list(APPEND DEFINES COCOTB${IFACE}_EXPORTS COCOTB_${IFACE}_DYN)
+    endforeach()
+
+    add_cocotb_library(${TARGET_NAME}
+        SOURCES ${SOURCES}
+        DEFINES ${DEFINES}
+        LIBRARIES gpi
+        RC_LIBRARIES "gpi"
+    )
+
+    # Fail the link if the library still references a simulator ABI symbol
+    # statically instead of resolving it at runtime through the dispatch
+    # table (macOS and Windows linkers reject undefined symbols by default).
+    if(NOT WIN32 AND NOT APPLE)
+        target_link_options(${TARGET_NAME} PRIVATE -Wl,--no-undefined)
+    endif()
+endfunction()
+
+add_family_library(icarus ICARUS INTERFACES VPI)
+add_family_library(modelsim MODELSIM INTERFACES VPI VHPI FLI)
+add_family_library(ghdl GHDL INTERFACES VPI)
 
 if(UNIX)
-    add_vpi_library(IUS IUS)
-    add_vhpi_library(IUS IUS)
-    add_vpi_library(VCS VCS)
-    add_vpi_library(VERILATOR VERILATOR)
-    add_vpi_library(DSim DSim)
+    add_family_library(ius IUS INTERFACES VPI VHPI)
+    add_family_library(vcs VCS INTERFACES VPI)
+    add_family_library(verilator VERILATOR INTERFACES VPI)
+    add_family_library(dsim DSim INTERFACES VPI)
 endif()
 
-add_vhpi_library(NVC NVC)
-
-add_vpi_library(ALDEC ALDEC)
-add_vhpi_library(ALDEC ALDEC)
+add_family_library(nvc NVC INTERFACES VHPI)
+add_family_library(aldec ALDEC INTERFACES VPI VHPI)
 
 if(WIN32)
     set(APPCONFIG_CONTENT "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>
@@ -414,14 +397,11 @@ if(SKBUILD AND NOT SKBUILD_STATE STREQUAL "editable")
     install(TARGETS gpi DESTINATION cocotb/libs)
 
     set(SIM_TARGETS
-        cocotbvpi_icarus cocotbvpi_modelsim cocotbvhpi_modelsim
-        cocotbfli_modelsim cocotbvpi_ghdl cocotbvpi_aldec cocotbvhpi_aldec
-        cocotbvhpi_nvc)
+        cocotb_icarus cocotb_modelsim cocotb_ghdl cocotb_aldec cocotb_nvc)
 
     if(UNIX)
         list(APPEND SIM_TARGETS
-            cocotbvpi_ius cocotbvhpi_ius cocotbvpi_vcs
-            cocotbvpi_verilator cocotbvpi_dsim)
+            cocotb_ius cocotb_vcs cocotb_verilator cocotb_dsim)
     endif()
 
     install(TARGETS ${SIM_TARGETS} DESTINATION cocotb/libs OPTIONAL)
