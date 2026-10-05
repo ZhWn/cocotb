@@ -77,7 +77,6 @@ set(INCLUDE_DIRS
 )
 
 set(SHARE_LIB_DIR ${CMAKE_SOURCE_DIR}/src/cocotb/share/lib)
-set(COCOTB_DEF_DIR ${CMAKE_SOURCE_DIR}/src/cocotb/share/def)
 
 if(WIN32)
     function(create_sxs_assembly_manifest NAME FILENAME LIBRARIES DEPENDENCY_ONLY MANIFEST_VAR)
@@ -249,6 +248,10 @@ set(GPI_LINK_LIBS "")
 if(UNIX)
     list(APPEND GPI_LINK_LIBS dl)
 endif()
+if(WIN32)
+    # psapi for EnumProcessModules() used by utils_lookup_global_sym()
+    list(APPEND GPI_LINK_LIBS psapi)
+endif()
 
 add_cocotb_library(gpi
     SOURCES
@@ -301,122 +304,81 @@ set_target_properties(simulator PROPERTIES
 )
 
 function(add_vpi_library SIM_NAME SIM_DEFINE)
-    set(options "")
-    set(oneValueArgs "")
-    set(multiValueArgs "EXTRA_LIBS" "EXTRA_LIB_DIRS")
-    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
     string(TOLOWER ${SIM_NAME} SIM_LOWER)
     set(TARGET_NAME cocotbvpi_${SIM_LOWER})
 
     add_cocotb_library(${TARGET_NAME}
         SOURCES
+            ${SHARE_LIB_DIR}/gpi/abi/vpi_dispatch.cpp
             ${SHARE_LIB_DIR}/gpi/vpi/VpiImpl.cpp
             ${SHARE_LIB_DIR}/gpi/vpi/VpiCbHdl.cpp
             ${SHARE_LIB_DIR}/gpi/vpi/VpiObj.cpp
             ${SHARE_LIB_DIR}/gpi/vpi/VpiIterator.cpp
             ${SHARE_LIB_DIR}/gpi/vpi/VpiSignal.cpp
-        DEFINES COCOTBVPI_EXPORTS ${SIM_DEFINE}
-        LIBRARIES gpi ${ARG_EXTRA_LIBS}
+        DEFINES COCOTBVPI_EXPORTS COCOTB_VPI_DYN ${SIM_DEFINE}
+        LIBRARIES gpi
         RC_LIBRARIES "gpi"
     )
 
-    if(WIN32)
-        target_link_directories(${TARGET_NAME} PRIVATE ${COCOTB_DEF_DIR})
-    endif()
-
-    if(ARG_EXTRA_LIB_DIRS)
-        target_link_directories(${TARGET_NAME} PRIVATE ${ARG_EXTRA_LIB_DIRS})
-    endif()
-
-    if(NOT WIN32)
-        if(APPLE)
-            target_link_options(${TARGET_NAME} PRIVATE -undefined dynamic_lookup)
-        else()
-            target_link_options(${TARGET_NAME} PRIVATE -Wl,--allow-shlib-undefined)
-        endif()
+    # Fail the link if the interface library still references a simulator ABI
+    # symbol statically instead of resolving it at runtime through the
+    # dispatch table (macOS and Windows linkers reject undefined symbols by
+    # default).
+    if(NOT WIN32 AND NOT APPLE)
+        target_link_options(${TARGET_NAME} PRIVATE -Wl,--no-undefined)
     endif()
 endfunction()
 
 function(add_vhpi_library SIM_NAME SIM_DEFINE)
-    set(options "")
-    set(oneValueArgs "")
-    set(multiValueArgs "EXTRA_LIBS" "EXTRA_LIB_DIRS")
-    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
     string(TOLOWER ${SIM_NAME} SIM_LOWER)
     set(TARGET_NAME cocotbvhpi_${SIM_LOWER})
 
     add_cocotb_library(${TARGET_NAME}
         SOURCES
+            ${SHARE_LIB_DIR}/gpi/abi/vhpi_dispatch.cpp
             ${SHARE_LIB_DIR}/gpi/vhpi/VhpiImpl.cpp
             ${SHARE_LIB_DIR}/gpi/vhpi/VhpiCbHdl.cpp
             ${SHARE_LIB_DIR}/gpi/vhpi/VhpiObj.cpp
             ${SHARE_LIB_DIR}/gpi/vhpi/VhpiIterator.cpp
             ${SHARE_LIB_DIR}/gpi/vhpi/VhpiSignal.cpp
-        DEFINES COCOTBVHPI_EXPORTS ${SIM_DEFINE}
-        LIBRARIES gpi ${ARG_EXTRA_LIBS}
+        DEFINES COCOTBVHPI_EXPORTS COCOTB_VHPI_DYN ${SIM_DEFINE}
+        LIBRARIES gpi
         RC_LIBRARIES "gpi"
     )
 
-    if(WIN32)
-        target_link_directories(${TARGET_NAME} PRIVATE ${COCOTB_DEF_DIR})
-    endif()
-
-    if(ARG_EXTRA_LIB_DIRS)
-        target_link_directories(${TARGET_NAME} PRIVATE ${ARG_EXTRA_LIB_DIRS})
-    endif()
-
-    if(NOT WIN32)
-        if(APPLE)
-            target_link_options(${TARGET_NAME} PRIVATE -undefined dynamic_lookup)
-        else()
-            target_link_options(${TARGET_NAME} PRIVATE -Wl,--allow-shlib-undefined)
-        endif()
+    # Fail the link if the interface library still references a simulator ABI
+    # symbol statically instead of resolving it at runtime through the
+    # dispatch table (macOS and Windows linkers reject undefined symbols by
+    # default).
+    if(NOT WIN32 AND NOT APPLE)
+        target_link_options(${TARGET_NAME} PRIVATE -Wl,--no-undefined)
     endif()
 endfunction()
 
-set(ICARUS_EXTRA_LIBS "")
-if(WIN32)
-    set(ICARUS_EXTRA_LIBS icarus)
-endif()
-add_vpi_library(ICARUS ICARUS EXTRA_LIBS ${ICARUS_EXTRA_LIBS})
+add_vpi_library(ICARUS ICARUS)
 
-set(MODELSIM_EXTRA_LIBS "")
-if(WIN32)
-    set(MODELSIM_EXTRA_LIBS modelsim)
-endif()
-
-add_vpi_library(MODELSIM MODELSIM EXTRA_LIBS ${MODELSIM_EXTRA_LIBS})
-add_vhpi_library(MODELSIM MODELSIM EXTRA_LIBS ${MODELSIM_EXTRA_LIBS})
+add_vpi_library(MODELSIM MODELSIM)
+add_vhpi_library(MODELSIM MODELSIM)
 
 add_cocotb_library(cocotbfli_modelsim
     SOURCES
+        ${SHARE_LIB_DIR}/gpi/abi/fli_dispatch.cpp
         ${SHARE_LIB_DIR}/gpi/fli/FliImpl.cpp
         ${SHARE_LIB_DIR}/gpi/fli/FliCbHdl.cpp
         ${SHARE_LIB_DIR}/gpi/fli/FliObjHdl.cpp
-    DEFINES COCOTBFLI_EXPORTS
-    LIBRARIES gpi ${MODELSIM_EXTRA_LIBS}
+    DEFINES COCOTBFLI_EXPORTS COCOTB_FLI_DYN
+    LIBRARIES gpi
     RC_LIBRARIES "gpi"
 )
 
-if(WIN32)
-    target_link_directories(cocotbfli_modelsim PRIVATE ${COCOTB_DEF_DIR})
+# Fail the link if the interface library still references a simulator ABI
+# symbol statically instead of resolving it at runtime through the dispatch
+# table (macOS and Windows linkers reject undefined symbols by default).
+if(NOT WIN32 AND NOT APPLE)
+    target_link_options(cocotbfli_modelsim PRIVATE -Wl,--no-undefined)
 endif()
 
-if(NOT WIN32)
-    if(APPLE)
-        target_link_options(cocotbfli_modelsim PRIVATE -undefined dynamic_lookup)
-    else()
-        target_link_options(cocotbfli_modelsim PRIVATE -Wl,--allow-shlib-undefined)
-    endif()
-endif()
-
-set(GHDL_EXTRA_LIBS "")
-if(WIN32)
-    set(GHDL_EXTRA_LIBS ghdl)
-endif()
-add_vpi_library(GHDL GHDL EXTRA_LIBS ${GHDL_EXTRA_LIBS})
+add_vpi_library(GHDL GHDL)
 
 if(UNIX)
     add_vpi_library(IUS IUS)
@@ -426,42 +388,12 @@ if(UNIX)
     add_vpi_library(DSim DSim)
 endif()
 
-set(NVC_EXTRA_LIBS "")
-if(WIN32)
-    set(NVC_EXTRA_LIBS nvcvhpi)
-endif()
-add_vhpi_library(NVC NVC EXTRA_LIBS ${NVC_EXTRA_LIBS})
+add_vhpi_library(NVC NVC)
 
-set(ALDEC_EXTRA_LIBS "")
-if(WIN32)
-    set(ALDEC_EXTRA_LIBS aldec)
-endif()
-add_vpi_library(ALDEC ALDEC EXTRA_LIBS ${ALDEC_EXTRA_LIBS})
-add_vhpi_library(ALDEC ALDEC EXTRA_LIBS ${ALDEC_EXTRA_LIBS})
+add_vpi_library(ALDEC ALDEC)
+add_vhpi_library(ALDEC ALDEC)
 
 if(WIN32)
-    if(MSVC)
-        foreach(SIM icarus modelsim aldec ghdl nvcvhpi)
-            add_custom_command(
-                OUTPUT ${COCOTB_DEF_DIR}/${SIM}.lib
-                COMMAND lib /def:${COCOTB_DEF_DIR}/${SIM}.def /out:${COCOTB_DEF_DIR}/${SIM}.lib /machine:$<IF:$<EQUAL:${CMAKE_SIZEOF_VOID_P},8>,X64,X86>
-                DEPENDS ${COCOTB_DEF_DIR}/${SIM}.def
-                COMMENT "Generating import library for ${SIM}"
-            )
-            add_custom_target(${SIM}_import_lib ALL DEPENDS ${COCOTB_DEF_DIR}/${SIM}.lib)
-        endforeach()
-    else()
-        foreach(SIM icarus modelsim aldec ghdl nvcvhpi)
-            add_custom_command(
-                OUTPUT ${COCOTB_DEF_DIR}/lib${SIM}.a
-                COMMAND dlltool -d ${COCOTB_DEF_DIR}/${SIM}.def -l ${COCOTB_DEF_DIR}/lib${SIM}.a
-                DEPENDS ${COCOTB_DEF_DIR}/${SIM}.def
-                COMMENT "Generating import library for ${SIM}"
-            )
-            add_custom_target(${SIM}_import_lib ALL DEPENDS ${COCOTB_DEF_DIR}/lib${SIM}.a)
-        endforeach()
-    endif()
-
     set(APPCONFIG_CONTENT "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>
 <configuration>
     <windows>
@@ -476,17 +408,6 @@ if(WIN32)
     file(WRITE ${CMAKE_BINARY_DIR}/cocotb/simulator${PYTHON_EXT_SUFFIX}.2.config
         "${APPCONFIG_CONTENT}"
     )
-endif()
-
-if(WIN32)
-    add_dependencies(cocotbvpi_icarus icarus_import_lib)
-    add_dependencies(cocotbvpi_modelsim modelsim_import_lib)
-    add_dependencies(cocotbvhpi_modelsim modelsim_import_lib)
-    add_dependencies(cocotbfli_modelsim modelsim_import_lib)
-    add_dependencies(cocotbvpi_ghdl ghdl_import_lib)
-    add_dependencies(cocotbvhpi_nvc nvcvhpi_import_lib)
-    add_dependencies(cocotbvpi_aldec aldec_import_lib)
-    add_dependencies(cocotbvhpi_aldec aldec_import_lib)
 endif()
 
 if(SKBUILD AND NOT SKBUILD_STATE STREQUAL "editable")

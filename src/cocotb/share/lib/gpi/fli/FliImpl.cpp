@@ -1153,6 +1153,9 @@ void FliImpl::main() noexcept {
 // This is run by GPI when requested for mixed-language simulations
 static void register_impl() {
     LOG_TRACE("GPI Init => [ FLI (register_impl) ]");
+#ifdef COCOTB_FLI_DYN
+    cocotb_abi::fli_dispatch_fill();
+#endif
     auto fli_table = new FliImpl("FLI");
     gpi_register_impl(fli_table);
     LOG_TRACE("[ FLI (register_impl) ] => GPI Init");
@@ -1163,6 +1166,9 @@ extern "C" {
 COCOTBFLI_EXPORT void cocotb_init() {
     gpi_init_logging_and_debug();
     LOG_TRACE("Sim => [ FLI (cocotb_init) ]");
+#ifdef COCOTB_FLI_DYN
+    cocotb_abi::fli_dispatch_fill();
+#endif
     auto fli_table = new FliImpl("FLI");
     fli_table->main();
     LOG_TRACE("[ FLI (cocotb_init) ] => Sim");

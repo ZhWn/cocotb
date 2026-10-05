@@ -1135,6 +1135,9 @@ static bool from_bootstrap = false;
 static void vhpi_main() {
     LOG_TRACE("%s => [ VHPI (vhpi_main) ]",
               from_bootstrap ? "Bootstrap" : "Sim (vhpi_startup_routines)");
+#ifdef COCOTB_VHPI_DYN
+    cocotb_abi::vhpi_dispatch_fill();
+#endif
     auto vhpi_table = new VhpiImpl("VHPI");
     vhpi_table->main();
     LOG_TRACE("[ VHPI (vhpi_main) ] => %s",
@@ -1144,6 +1147,9 @@ static void vhpi_main() {
 // This is run by GPI when requested for mixed-language simulations
 static void register_impl() {
     LOG_TRACE("GPI Init => [ VHPI (register_impl) ]");
+#ifdef COCOTB_VHPI_DYN
+    cocotb_abi::vhpi_dispatch_fill();
+#endif
     auto vhpi_table = new VhpiImpl("VHPI");
     gpi_register_impl(vhpi_table);
     LOG_TRACE("[ VHPI (register_impl) ] => GPI Init");

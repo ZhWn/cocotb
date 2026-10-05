@@ -278,6 +278,11 @@ GPI_EXPORT void gpi_init_logging_and_debug();
 void *utils_dyn_open(const char *lib_name);
 void *utils_dyn_sym(void *handle, const char *sym_name);
 
+/* Look up a symbol exported by the simulator or one of its modules,
+ * without holding a reference to a specific library handle. Used by the
+ * interface dispatch tables to resolve the simulator ABI at runtime. */
+GPI_EXPORT void *utils_lookup_global_sym(const char *sym_name);
+
 #define GPI_TO_USER_CB(impl) LOG_TRACE("[ " xstr(impl) " ] => User Callback")
 
 #define USER_CB_TO_GPI(impl) LOG_TRACE("User Callback => [ " xstr(impl) " ]")

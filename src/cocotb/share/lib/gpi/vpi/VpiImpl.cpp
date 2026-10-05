@@ -841,6 +841,9 @@ static bool from_bootstrap = false;
 static void vpi_main() {
     LOG_TRACE("%s => [ VPI (vpi_main) ]",
               from_bootstrap ? "Bootstrap" : "Sim (vlog_startup_routines)");
+#ifdef COCOTB_VPI_DYN
+    cocotb_abi::vpi_dispatch_fill();
+#endif
 #ifdef VCS
     // VCS loads the entry point both during compilation and again at
     // simulation. Only during simulation are most of the VPI routines
@@ -860,6 +863,9 @@ static void vpi_main() {
 // This is run by GPI when requested for mixed-language simulations
 static void register_impl() {
     LOG_TRACE("GPI Init => [ VPI (register_impl) ]");
+#ifdef COCOTB_VPI_DYN
+    cocotb_abi::vpi_dispatch_fill();
+#endif
     auto vpi_table = new VpiImpl("VPI");
     gpi_register_impl(vpi_table);
     LOG_TRACE("[ VPI (register_impl) ] => GPI Init");
