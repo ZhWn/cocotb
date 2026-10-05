@@ -1929,6 +1929,14 @@ class Verilator(Runner):
             cocotb_tools.config.share_dir / "lib" / "verilator" / "verilator.cpp"
         )
 
+        # On Linux an executable's own symbols stay out of its dynamic symbol
+        # table unless it is linked with -rdynamic, and the dispatch tables
+        # locate the simulator's VPI entry points with dlsym(RTLD_DEFAULT) at
+        # load time. macOS already exports them by default, so only Linux needs
+        # the flag. The Makefile-based flow adds the same flag, see
+        # makefiles/simulators/Makefile.verilator.
+        export_flags = " -rdynamic" if sys.platform == "linux" else ""
+
         cmds = []
         cmds.append(
             [
@@ -1946,7 +1954,7 @@ class Verilator(Runner):
                 "-o",
                 self.hdl_toplevel,
                 "-LDFLAGS",
-                f"-Wl,-rpath,{cocotb_tools.config.libs_dir} -L{cocotb_tools.config.libs_dir} -lcocotb_verilator",
+                f"-Wl,-rpath,{cocotb_tools.config.libs_dir} -L{cocotb_tools.config.libs_dir} -lcocotb_verilator{export_flags}",
             ]
             + (["--trace"] if self.waves else [])
             + [arg.value for arg in self._build_args]
