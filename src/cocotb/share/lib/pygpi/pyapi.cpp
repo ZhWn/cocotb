@@ -24,8 +24,13 @@
 #include "./pygpi_priv.hpp"  // PYGPI_LOG_*
 
 #if defined(_WIN32)
-#include <tlhelp32.h>
+// windows.h must come before tlhelp32.h (tlhelp32.h does not include
+// windows.h itself), but clang-format's include sorting would put it
+// second.
+// clang-format off
 #include <windows.h>
+#include <tlhelp32.h>
+// clang-format on
 #else
 #include <dlfcn.h>
 #endif
