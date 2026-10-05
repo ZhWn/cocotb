@@ -28,12 +28,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 
 if(WIN32)
-    set(PYTHON_EXT_SUFFIX ".${Python_SOABI}.pyd")
-else()
-    set(PYTHON_EXT_SUFFIX ".${Python_SOABI}.so")
-endif()
-
-if(WIN32)
     set(LIB_EXT "dll")
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 else()
@@ -148,7 +142,19 @@ function(add_cocotb_library TARGET_NAME)
     set(multiValueArgs "SOURCES" "LIBRARIES" "DEFINES" "RC_LIBRARIES" "RC_RUNTIME_LIBRARIES")
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-    set(ALL_SOURCES ${ARG_SOURCES})
+    # Every cocotb interface library carries the GPI sources and the PyGPI
+    # sources so that exactly one cocotb library file needs to be loaded per
+    # simulation run (the GPI entry point starts the interpreter directly and
+    # `import cocotb.simulator` resolves through the interpreter's built-in
+    # module table, see pygpi/embed.cpp).
+    set(ALL_SOURCES
+        ${ARG_SOURCES}
+        $<TARGET_OBJECTS:gpi>
+        ${SHARE_LIB_DIR}/pygpi/bind.cpp
+        ${SHARE_LIB_DIR}/pygpi/embed.cpp
+        ${SHARE_LIB_DIR}/pygpi/logging.cpp
+        ${SHARE_LIB_DIR}/pygpi/pyapi.cpp
+    )
     if(WIN32)
         set(RC_FILENAME "${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}.rc")
         set(LIB_NAME ${ARG_OUTPUT_NAME})
@@ -209,37 +215,43 @@ function(add_cocotb_library TARGET_NAME)
     endif()
 
     target_include_directories(${TARGET_NAME} PRIVATE ${INCLUDE_DIRS})
-    target_compile_definitions(${TARGET_NAME} PRIVATE ${ARG_DEFINES} ${EXTRA_DEFINES})
+    # GPI_EXPORTS: gpi.h declarations must be dllexport/default-visible for
+    # same-image references, because the GPI functions they declare are
+    # defined inside this very library (gpi objects are compiled in with
+    # GPI_EXPORTS too). Without it MSVC would emit __imp_gpi_* references
+    # that no import library satisfies.
+    # PYGPI_EXPORTS and Py_LIMITED_API apply to the pygpi sources: they are
+    # compiled against the stable ABI of the oldest supported Python so that
+    # only stable ABI symbols can be referenced (see pygpi/pyapi.hpp).
+    target_compile_definitions(${TARGET_NAME} PRIVATE
+        ${ARG_DEFINES} ${EXTRA_DEFINES}
+        GPI_EXPORTS PYGPI_EXPORTS Py_LIMITED_API=0x03090000
+    )
     target_compile_options(${TARGET_NAME} PRIVATE ${EXTRA_CXX_FLAGS})
 
+    # dl provides dlopen()/dlsym() for gpi/dynload.cpp and pygpi/pyapi.cpp on
+    # Unix; psapi backs utils_lookup_global_sym() on Windows. libpython is
+    # deliberately NOT linked: every Python C API symbol is resolved at
+    # runtime instead (see pygpi/pyapi.hpp).
     if(ARG_LIBRARIES)
         target_link_libraries(${TARGET_NAME} PRIVATE ${ARG_LIBRARIES})
     endif()
+    target_link_libraries(${TARGET_NAME} PRIVATE ${GPI_LINK_LIBS})
 
     if(WIN32)
         target_compile_definitions(${TARGET_NAME} PRIVATE WIN32)
     endif()
 
     if(NOT WIN32)
-        if("${TARGET_NAME}" STREQUAL "simulator")
-            if(APPLE)
-                set(_rpath "@loader_path/libs")
-            else()
-                set(_rpath "\$ORIGIN/libs")
-            endif()
+        if(APPLE)
+            set(_rpath "@loader_path")
         else()
-            if(APPLE)
-                set(_rpath "@loader_path")
-            else()
-                set(_rpath "\$ORIGIN")
-            endif()
+            set(_rpath "\$ORIGIN")
         endif()
         set_target_properties(${TARGET_NAME} PROPERTIES INSTALL_RPATH "${_rpath}")
 
         if(APPLE)
-            if(NOT "${TARGET_NAME}" STREQUAL "simulator")
-                set_target_properties(${TARGET_NAME} PROPERTIES INSTALL_NAME_DIR "@rpath")
-            endif()
+            set_target_properties(${TARGET_NAME} PROPERTIES INSTALL_NAME_DIR "@rpath")
         endif()
     endif()
 endfunction()
@@ -253,55 +265,24 @@ if(WIN32)
     list(APPEND GPI_LINK_LIBS psapi)
 endif()
 
-add_cocotb_library(gpi
-    SOURCES
-        ${SHARE_LIB_DIR}/gpi/GpiCbHdl.cpp
-        ${SHARE_LIB_DIR}/gpi/GpiCommon.cpp
-        ${SHARE_LIB_DIR}/gpi/dynload.cpp
-        ${SHARE_LIB_DIR}/gpi/logging.cpp
-    DEFINES GPI_EXPORTS
-    LIBRARIES ${GPI_LINK_LIBS}
-    RC_LIBRARIES ""
+# The GPI is built as an object library that every interface library links
+# in: a process may only load a single cocotb library per run, so gpi cannot
+# be a shared library of its own.
+add_library(gpi OBJECT
+    ${SHARE_LIB_DIR}/gpi/GpiCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/GpiCommon.cpp
+    ${SHARE_LIB_DIR}/gpi/dynload.cpp
+    ${SHARE_LIB_DIR}/gpi/logging.cpp
 )
-
-add_cocotb_library(simulator
-    SOURCES
-        ${SHARE_LIB_DIR}/pygpi/bind.cpp
-        ${SHARE_LIB_DIR}/pygpi/embed.cpp
-        ${SHARE_LIB_DIR}/pygpi/logging.cpp
-        ${SHARE_LIB_DIR}/pygpi/pyapi.cpp
-    # Compile against the stable ABI of the oldest supported Python so that
-    # only stable ABI symbols can be referenced (see pygpi/pyapi.hpp).
-    DEFINES PYGPI_EXPORTS Py_LIMITED_API=0x03090000
-    # dl provides dlopen()/dlsym() for pyapi.cpp on Unix. libpython is
-    # deliberately NOT linked: every Python C API symbol is resolved at
-    # runtime instead (see pygpi/pyapi.hpp).
-    LIBRARIES gpi ${GPI_LINK_LIBS}
-    RC_LIBRARIES ""
-)
-# Fail the link if any Python C API use was not redirected through the
-# runtime symbol table of pygpi/pyapi.hpp (macOS and Windows linkers reject
-# undefined symbols by default).
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_options(simulator PRIVATE -Wl,--no-undefined)
+target_include_directories(gpi PRIVATE ${INCLUDE_DIRS})
+target_compile_definitions(gpi PRIVATE GPI_EXPORTS ${EXTRA_DEFINES})
+target_compile_options(gpi PRIVATE ${EXTRA_CXX_FLAGS})
+# Objects are placed into shared libraries, so they must be position
+# independent.
+set_target_properties(gpi PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(WIN32)
+    target_compile_definitions(gpi PRIVATE WIN32)
 endif()
-
-if(SKBUILD_STATE STREQUAL "editable")
-    set_target_properties(simulator PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/src/cocotb
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/src/cocotb
-    )
-else()
-    set_target_properties(simulator PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cocotb
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cocotb
-    )
-endif()
-
-set_target_properties(simulator PROPERTIES
-    PREFIX ""
-    SUFFIX ${PYTHON_EXT_SUFFIX}
-)
 
 # Compilation units for each GPI interface family. A simulator family
 # library compiles every interface its simulator's flows use into a single
@@ -350,13 +331,13 @@ function(add_family_library FAMILY SIM_DEFINE)
     add_cocotb_library(${TARGET_NAME}
         SOURCES ${SOURCES}
         DEFINES ${DEFINES}
-        LIBRARIES gpi
-        RC_LIBRARIES "gpi"
     )
 
     # Fail the link if the library still references a simulator ABI symbol
     # statically instead of resolving it at runtime through the dispatch
-    # table (macOS and Windows linkers reject undefined symbols by default).
+    # table, or a Python C API symbol statically instead of through the
+    # runtime symbol table of pygpi/pyapi.hpp (macOS and Windows linkers
+    # reject undefined symbols by default).
     if(NOT WIN32 AND NOT APPLE)
         target_link_options(${TARGET_NAME} PRIVATE -Wl,--no-undefined)
     endif()
@@ -376,26 +357,7 @@ endif()
 add_family_library(nvc NVC INTERFACES VHPI)
 add_family_library(aldec ALDEC INTERFACES VPI VHPI)
 
-if(WIN32)
-    set(APPCONFIG_CONTENT "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>
-<configuration>
-    <windows>
-        <assemblyBinding xmlns=\"urn:schemas-microsoft-com:asm.v1\">
-            <probing privatePath=\"libs\" />
-        </assemblyBinding>
-    </windows>
-</configuration>")
-
-    file(WRITE ${CMAKE_BINARY_DIR}/cocotb/simulator.2.config "${APPCONFIG_CONTENT}")
-    # Loader looks for <basename of pyd>.2.config next to the extension module.
-    file(WRITE ${CMAKE_BINARY_DIR}/cocotb/simulator${PYTHON_EXT_SUFFIX}.2.config
-        "${APPCONFIG_CONTENT}"
-    )
-endif()
-
 if(SKBUILD AND NOT SKBUILD_STATE STREQUAL "editable")
-    install(TARGETS gpi DESTINATION cocotb/libs)
-
     set(SIM_TARGETS
         cocotb_icarus cocotb_modelsim cocotb_ghdl cocotb_aldec cocotb_nvc)
 
@@ -405,20 +367,4 @@ if(SKBUILD AND NOT SKBUILD_STATE STREQUAL "editable")
     endif()
 
     install(TARGETS ${SIM_TARGETS} DESTINATION cocotb/libs OPTIONAL)
-
-    install(TARGETS simulator
-        RUNTIME DESTINATION cocotb
-        LIBRARY DESTINATION cocotb)
-
-    # Windows loads simulator.pyd next to cocotb/; put gpi.dll here too (also under libs/).
-    if(WIN32)
-        install(TARGETS gpi
-            RUNTIME DESTINATION cocotb
-            LIBRARY DESTINATION cocotb)
-        install(FILES ${CMAKE_BINARY_DIR}/cocotb/simulator.2.config DESTINATION cocotb)
-        file(GLOB PYD_CONFIG_FILES ${CMAKE_BINARY_DIR}/cocotb/*.pyd.2.config)
-        if(PYD_CONFIG_FILES)
-            install(FILES ${PYD_CONFIG_FILES} DESTINATION cocotb)
-        endif()
-    endif()
 endif()

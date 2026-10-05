@@ -6,10 +6,11 @@
  * @file   pyapi.cpp
  * @brief Resolution of the Python C API symbol table at runtime.
  *
- * libpython is located by probing the libraries named in GPI_USERS first and
- * then the libraries already loaded into this process. Every symbol listed in
- * PYGPI_PYAPI_FUNCTIONS and PYGPI_PYAPI_EXCEPTIONS is then looked up in the
- * resulting handle. See pyapi.hpp for the overall design.
+ * libpython is loaded from LIBPYTHON_LOC when that variable is set, and
+ * otherwise located among the libraries already loaded into this process.
+ * Every symbol listed in PYGPI_PYAPI_FUNCTIONS and PYGPI_PYAPI_EXCEPTIONS is
+ * then looked up in the resulting handle. See pyapi.hpp for the overall
+ * design.
  */
 
 #include "./pyapi.hpp"
@@ -45,11 +46,15 @@ Scope scope = Scope::unset;
 void *module_handle = nullptr;
 
 /// Load a library. Probing failures are expected, so this stays silent.
+/// libpython is opened with RTLD_GLOBAL: extension modules loaded into the
+/// simulator process later (numpy, for instance) resolve the Python C API
+/// symbols from the global scope, which a libpython opened RTLD_LOCAL would
+/// deny them.
 void *open_library(const char *path) {
 #if defined(_WIN32)
     return reinterpret_cast<void *>(LoadLibraryA(path));
 #else
-    return dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+    return dlopen(path, RTLD_LAZY | RTLD_GLOBAL);
 #endif
 }
 
@@ -84,43 +89,6 @@ bool is_python_library(void *handle) {
 void set_module_scope(void *handle) {
     module_handle = handle;
     scope = Scope::module;
-}
-
-/// Try the libraries named in GPI_USERS, parsed like gpi_load_users():
-/// `<lib>[,<entry>]` entries separated by `;`.
-bool find_in_gpi_users() {
-    const char *users = std::getenv("GPI_USERS");
-    if (users == nullptr) {
-        return false;
-    }
-
-    const std::string users_str = users;
-    std::string::size_type start_idx = 0;
-    for (;;) {
-        auto next_delim = users_str.find(';', start_idx);
-        if (next_delim == std::string::npos) {
-            next_delim = users_str.length();
-        }
-        const auto user = users_str.substr(start_idx, next_delim - start_idx);
-        start_idx = next_delim + 1;
-
-        // Everything before the last comma is the library path; the rest is
-        // the entry function name (which is not of interest here).
-        const auto split_idx = user.rfind(',');
-        const auto lib_name =
-            (split_idx == std::string::npos) ? user : user.substr(0, split_idx);
-        if (!lib_name.empty()) {
-            void *handle = open_library(lib_name.c_str());
-            if (is_python_library(handle)) {
-                set_module_scope(handle);
-                return true;
-            }
-        }
-        if (start_idx > users_str.length()) {
-            break;
-        }
-    }
-    return false;
 }
 
 #if defined(_WIN32)
@@ -191,7 +159,7 @@ bool find_in_process() {
 
 /// Look for libpython in the process' global symbol scope. The cocotb runner
 /// process finds its own libpython's symbols there, and the simulator process
-/// finds them after GPI_USERS preloaded libpython with RTLD_GLOBAL.
+/// finds them after LIBPYTHON_LOC preloaded libpython with RTLD_GLOBAL.
 bool find_in_global_scope() {
     if (dlsym(RTLD_DEFAULT, "Py_Initialize") != nullptr) {
         scope = Scope::global;
@@ -204,9 +172,21 @@ bool find_in_global_scope() {
 
 /// Identify the library providing the Python C API.
 bool discover_python_library() {
-    if (find_in_gpi_users()) {
-        return true;
+    if (const char *loc = std::getenv("LIBPYTHON_LOC")) {
+        if (*loc != '\0') {
+            // Explicitly configured: load it, or fail. Falling back to a
+            // different libpython would silently mask a broken setup.
+            void *handle = open_library(loc);
+            if (is_python_library(handle)) {
+                set_module_scope(handle);
+                return true;
+            }
+            PYGPI_LOG_ERROR("Unable to load libpython from LIBPYTHON_LOC '%s'",
+                            loc);
+            return false;
+        }
     }
+    // Not configured: the process itself may already provide libpython.
 #if defined(_WIN32)
     return find_in_process();
 #else
@@ -257,8 +237,8 @@ bool load_symbols() {
 bool load_impl() {
     if (!discover_python_library()) {
         PYGPI_LOG_ERROR(
-            "Unable to locate libpython; GPI_USERS must list the Python "
-            "library before the simulator entry point");
+            "Unable to locate libpython; set LIBPYTHON_LOC to its path "
+            "(available from `cocotb-config --libpython`)");
         return false;
     }
     return load_symbols();

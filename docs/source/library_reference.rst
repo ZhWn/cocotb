@@ -81,7 +81,10 @@ Python Test Runner
     i.e. ``libpython.so`` or ``python.dll`` on Windows.
     This is determined with ``cocotb-config --libpython`` during build.
 
-    This is only used if :envvar:`GPI_USERS` is not already defined by the user.
+    The simulator process loads this library when it starts the embedded interpreter.
+    The build systems and Python Runners set this variable automatically;
+    when writing a custom flow, set it to the result of ``cocotb-config --libpython``.
+    If it is not set, cocotb searches the libraries already loaded into the simulator process instead.
 
 .. envvar:: SIM_CMD_PREFIX
 

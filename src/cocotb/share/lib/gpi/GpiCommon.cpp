@@ -16,6 +16,12 @@
 #include "./gpi_priv.hpp"
 #include "./logging.hpp"
 
+// PyGPI is compiled into this library (see CMakeLists.txt), so the GPI entry
+// point starts the embedded Python interpreter directly instead of
+// dlopen()ing a separately built module from an environment-provided entry
+// list. Defined in pygpi/embed.cpp; returns 0 on success.
+extern "C" int pygpi_initialize(void);
+
 using namespace std;
 
 static vector<GpiImplInterface *> registered_impls;
@@ -95,7 +101,7 @@ bool gpi_has_registered_impl() { return registered_impls.size() > 0; }
 void gpi_start_of_sim_time() {
     for (auto &cb_info : start_of_sim_time_cbs) {
         // start_of_sime_time should never fail, this should be moved to
-        // gpi_load_users, as should the (argc,argv)
+        // gpi_entry_point, as should the (argc,argv)
         LOG_TRACE("[ GPI Start Sim ] => User Start callback");
         int error = cb_info.first(cb_info.second);
         LOG_TRACE("User Start callback => [ GPI Start Sim ]");
@@ -182,70 +188,6 @@ static void gpi_load_libs(std::vector<std::string> to_load) {
     }
 }
 
-static int gpi_load_users() {
-    auto users = getenv("GPI_USERS");
-    if (!users) {
-        LOG_ERROR("No GPI_USERS specified, exiting...");
-        return -1;
-    }
-    // I would have loved to use istringstream and getline, but it causes a
-    // compilation issue when compiling with newer GCCs against C++11.
-    std::string users_str = users;
-    std::string::size_type start_idx = 0;
-    bool done = false;
-    while (!done) {
-        auto next_delim = users_str.find(';', start_idx);
-        if (next_delim == std::string::npos) {
-            done = true;
-            next_delim = users_str.length();
-        }
-        auto user = users_str.substr(start_idx, next_delim - start_idx);
-        start_idx = next_delim + 1;
-
-        auto split_idx = user.rfind(',');
-
-        std::string lib_name;
-        std::string func_name;
-        if (split_idx == std::string::npos) {
-            lib_name = std::move(user);
-        } else {
-            lib_name = user.substr(0, split_idx);
-            func_name = user.substr(split_idx + 1, std::string::npos);
-        }
-
-        void *lib_handle = utils_dyn_open(lib_name.c_str());
-        if (!lib_handle) {
-            LOG_ERROR("Error loading library '%s'", lib_name.c_str());
-            gpi_finish();
-            return -1;
-        }
-
-        if (split_idx != std::string::npos) {
-            void *func_handle = utils_dyn_sym(lib_handle, func_name.c_str());
-            if (!func_handle) {
-                LOG_ERROR(
-                    "Error getting entry func '%s' from loaded library '%s'",
-                    func_name.c_str(), lib_name.c_str());
-                gpi_finish();
-                return -1;
-            }
-
-            LOG_INFO("Running entry func '%s' from loaded library '%s'",
-                     func_name.c_str(), lib_name.c_str());
-
-            auto entry_func = (void (*)(void))func_handle;
-            LOG_TRACE("[ GPI Init ] => User Init (%s:%s)", lib_name.c_str(),
-                      func_name.c_str());
-            entry_func();
-            LOG_TRACE("User Init => [ GPI Init ]");
-        } else {
-            LOG_INFO("Loaded entry library: '%s'", lib_name.c_str());
-        }
-    }
-
-    return 0;
-}
-
 void gpi_entry_point() {
     LOG_TRACE("=> [ GPI Init ]");
 
@@ -271,8 +213,19 @@ void gpi_entry_point() {
         gpi_load_libs(to_load);
     }
 
-    // Load users
-    if (gpi_load_users()) {
+    // GPI_USERS used to carry the libpython path and the PyGPI entry point;
+    // it is no longer supported. libpython is located via LIBPYTHON_LOC and
+    // the PyGPI is part of this library (see CMakeLists.txt), so there is
+    // nothing left to load here.
+    if (getenv("GPI_USERS")) {
+        LOG_WARN(
+            "GPI_USERS is no longer supported and is ignored; load extra "
+            "libraries with GPI_EXTRA instead");
+    }
+
+    // Start the embedded Python interpreter.
+    if (pygpi_initialize() != 0) {
+        gpi_finish();
         return;
     }
 

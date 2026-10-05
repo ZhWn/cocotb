@@ -164,7 +164,7 @@ Make Variables
     i.e. ``libpython.so`` or ``python.dll`` on Windows.
     This is determined with ``cocotb-config --libpython`` during build.
 
-    This is only used if :envvar:`GPI_USERS` is not already defined by the user.
+    This is only used if :envvar:`LIBPYTHON_LOC` is not already defined by the user.
 
 The :envvar:`COCOTB_TOPLEVEL` variable is also often used by the Makefile-based build and runner system.
 

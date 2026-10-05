@@ -103,9 +103,7 @@ manually override the LIBPYTHON_LOC make variable with the absolute path to libp
 
 endef
 
-ifndef GPI_USERS
 ifndef LIBPYTHON_LOC
-
 # get the path to libpython and the return code from the script
 # adapted from https://stackoverflow.com/a/24658961/6614127
 FIND_LIBPYTHON_RES := $(shell $(PYTHON_BIN) -m cocotb_tools.config --libpython; echo $$?)
@@ -117,9 +115,7 @@ ifneq ($(FIND_LIBPYTHON_RC),0)
     $(error $(find_libpython_errmsg))
 endif
 endif
-GPI_USERS := $(LIBPYTHON_LOC);$(shell $(PYTHON_BIN) -m cocotb_tools.config --pygpi-entry-point)
-endif
-export GPI_USERS
+export LIBPYTHON_LOC
 
 define check_vhdl_sources
 if [ "$(VHDL_SOURCES_$(LIB))" == "" ]; then \

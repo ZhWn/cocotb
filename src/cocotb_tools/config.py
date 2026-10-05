@@ -93,10 +93,10 @@ def _help_vars_text() -> str:
 
         GPI
         ---
-        GPI_USERS         List of user libraries to load after GPI is initialized
         GPI_EXTRA         Extra libraries to load as part of GPI initialization
         GPI_LOG_LEVEL     Default logging level for "gpi" loggers (default INFO)
         GPI_DEBUG         Enable GPI debug features, including TRACE log output
+        LIBPYTHON_LOC     Path to the Python library to load into the simulator process
 
         PYGPI
         -----
@@ -107,12 +107,6 @@ def _help_vars_text() -> str:
         For details, see {}"""
     ).format(doclink)
     return helpmsg
-
-
-def pygpi_entry_point() -> str:
-    import cocotb.simulator  # noqa: PLC0415
-
-    return f"{Path(cocotb.simulator.__file__).resolve()},initialize"
 
 
 def lib_name_path(interface: str, simulator: str) -> Path:
@@ -254,11 +248,6 @@ def _get_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the version of cocotb",
     )
-    group.add_argument(
-        "--pygpi-entry-point",
-        action="store_true",
-        help="Print the PYGPI entry point for use in GPI_USERS",
-    )
 
     return parser
 
@@ -286,8 +275,6 @@ def main() -> None:
         print(lib_name_path(*args.lib_name_path).as_posix())
     elif args.lib_entry:
         print(lib_entry(*args.lib_entry))
-    elif args.pygpi_entry_point:
-        print(pygpi_entry_point())
     elif args.version:
         print(_get_version())
 

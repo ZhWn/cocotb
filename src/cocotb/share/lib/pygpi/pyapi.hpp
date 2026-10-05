@@ -149,12 +149,12 @@ extern PyApi api;
 
 /** Locate libpython and resolve every entry of ::api.
  *
- * The libraries listed in GPI_USERS are searched first (the cocotb makefiles
- * and runner put libpython there ahead of the simulator entry point), then
- * the libraries already loaded into the process. Returns true once every
- * symbol has been resolved; later calls return immediately. Safe to call
- * before the interpreter is initialized, from multiple threads, and
- * re-entrantly (a re-entrant call reports failure rather than recursing).
+ * libpython is loaded from LIBPYTHON_LOC when the variable is set (the
+ * cocotb makefiles and runner always compute it), otherwise found among the
+ * libraries already loaded into the process. Returns true once every symbol
+ * has been resolved; later calls return immediately. Safe to call before the
+ * interpreter is initialized, from multiple threads, and re-entrantly (a
+ * re-entrant call reports failure rather than recursing).
  */
 bool ensure_loaded();
 

@@ -17,7 +17,7 @@
 
 #include "../utils.hpp"  // DEFER
 #include "./pyapi.hpp"
-#include "./pygpi_priv.hpp"  // pygpi_logger_set_level, pygpi_logger_initialize, pygpi_logger_finalize, LOG_* macros, PYGPI_EXPORT
+#include "./pygpi_priv.hpp"  // pygpi_logger_set_level, pygpi_logger_initialize, pygpi_logger_finalize, LOG_* macros
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -93,7 +93,14 @@ static int start_of_sim_time(void *);
 static void end_of_sim_time(void *);
 static void finalize(void *);
 
-extern "C" PYGPI_EXPORT void initialize(void) {
+// Start the embedded Python interpreter. Called directly from
+// gpi_entry_point() (see gpi/GpiCommon.cpp): PyGPI is compiled into the same
+// library, so no export macro and no environment-provided entry list are
+// involved. Deliberately not named `initialize`: without PYGPI_EXPORT this
+// symbol has hidden visibility on ELF platforms, which keeps the loader from
+// interposing this call on some other library's `initialize`.
+// Returns 0 on success; on failure the caller ends the simulation.
+extern "C" int pygpi_initialize(void) {
     pygpi_init_debug();
     pygpi_logging_initialize();
 
@@ -103,7 +110,7 @@ extern "C" PYGPI_EXPORT void initialize(void) {
     if (python_init_called) {
         // LCOV_EXCL_START
         PYGPI_LOG_ERROR("PyGPI library initialized again!");
-        return;
+        return 0;
         // LCOV_EXCL_STOP
     }
     python_init_called = 1;
@@ -113,7 +120,7 @@ extern "C" PYGPI_EXPORT void initialize(void) {
     if (!pygpi::ensure_loaded()) {
         // LCOV_EXCL_START
         PYGPI_LOG_ERROR("Unable to load the Python C API from libpython");
-        return;
+        return -1;
         // LCOV_EXCL_STOP
     }
 
@@ -124,7 +131,7 @@ extern "C" PYGPI_EXPORT void initialize(void) {
 
     if (get_interpreter_path(interpreter_path, sizeof(interpreter_path))) {
         // LCOV_EXCL_START
-        return;
+        return -1;
         // LCOV_EXCL_STOP
     }
     PYGPI_LOG_INFO("Using Python %s interpreter at %ls", PY_VERSION,
@@ -136,7 +143,7 @@ extern "C" PYGPI_EXPORT void initialize(void) {
     if (PyImport_AppendInittab("cocotb.simulator", PyInit_simulator) != 0) {
         // LCOV_EXCL_START
         PYGPI_LOG_ERROR("Failed to register cocotb.simulator with Python");
-        return;
+        return -1;
         // LCOV_EXCL_STOP
     }
 
@@ -198,14 +205,14 @@ extern "C" PYGPI_EXPORT void initialize(void) {
             // LCOV_EXCL_START
             PYGPI_LOG_ERROR(
                 "COCOTB_ATTACH only needs to be set to ~30 seconds");
-            return;
+            return 0;
             // LCOV_EXCL_STOP
         }
         if ((errno != 0 && sleep_time == 0) || (sleep_time <= 0)) {
             // LCOV_EXCL_START
             PYGPI_LOG_ERROR(
                 "COCOTB_ATTACH must be set to an integer base 10 or omitted");
-            return;
+            return 0;
             // LCOV_EXCL_STOP
         }
 
@@ -214,6 +221,8 @@ extern "C" PYGPI_EXPORT void initialize(void) {
             sleep_time, getpid());
         sleep((unsigned int)sleep_time);
     }
+
+    return 0;
 }
 
 static void finalize(void *) {
