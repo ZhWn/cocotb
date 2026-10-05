@@ -93,6 +93,76 @@ static int start_of_sim_time(void *);
 static void end_of_sim_time(void *);
 static void finalize(void *);
 
+// Python <= 3.10's BuiltinImporter.find_spec() returns None whenever it is
+// handed a non-None path, and importing a submodule always passes the parent
+// package's __path__. The AppendInittab entry is therefore invisible to
+// `import cocotb.simulator` on those versions, and the on-disk simulator.py
+// shim gets loaded instead (failing at startup with "No simulator
+// available!"). CPython dropped that guard in 3.11, so only the older
+// interpreters are affected. This snippet installs a finder at the front of
+// sys.meta_path that answers for `cocotb.simulator` alone, deliberately
+// ignoring the path argument so the built-in module table is consulted on
+// every supported version. The module still loads through the standard
+// machinery (parent package attribute, spec.origin "built-in"), and every
+// other import falls through to the untouched finder chain.
+static const char *const cocotb_simulator_finder_snippet =
+    "import importlib.machinery\n"
+    "import sys\n"
+    "\n"
+    "class _CocotbBuiltinFinder:\n"
+    "    def find_spec(self, fullname, path=None, target=None):\n"
+    "        if fullname == 'cocotb.simulator':\n"
+    "            return "
+    "importlib.machinery.BuiltinImporter.find_spec(fullname, None)\n"
+    "        return None\n"
+    "\n"
+    "sys.meta_path.insert(0, _CocotbBuiltinFinder())\n";
+
+// Install the finder above right after Py_Initialize(). Like a failed
+// AppendInittab, failure here is fatal: without the finder the whole run is
+// broken on Python <= 3.10 anyway. PyEval_GetBuiltins() is safe to call here
+// even though no frame is executing yet (verified on 3.9-3.12).
+static int install_builtin_simulator_finder() {
+    PyObject *globals = PyDict_New();
+    PyObject *builtins = globals != NULL ? PyEval_GetBuiltins() : NULL;
+    if (globals == NULL || builtins == NULL ||
+        PyDict_SetItemString(globals, "__builtins__", builtins) != 0) {
+        // LCOV_EXCL_START
+        if (PyErr_Occurred() != NULL) {
+            PyErr_Print();
+        }
+        Py_XDECREF(globals);
+        PYGPI_LOG_ERROR(
+            "Failed to prepare globals for the cocotb.simulator import finder");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+
+    PyObject *code = Py_CompileString(cocotb_simulator_finder_snippet,
+                                      "<cocotb sim finder>", Py_file_input);
+    if (code == NULL) {
+        // LCOV_EXCL_START
+        PyErr_Print();
+        Py_DECREF(globals);
+        PYGPI_LOG_ERROR("Failed to compile the cocotb.simulator import finder");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+
+    PyObject *result = PyEval_EvalCode(code, globals, globals);
+    Py_DECREF(code);
+    Py_DECREF(globals);
+    if (result == NULL) {
+        // LCOV_EXCL_START
+        PyErr_Print();
+        PYGPI_LOG_ERROR("Failed to install the cocotb.simulator import finder");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+    Py_DECREF(result);
+    return 0;
+}
+
 // Start the embedded Python interpreter. Called directly from
 // gpi_entry_point() (see gpi/GpiCommon.cpp): PyGPI is compiled into the same
 // library, so no export macro and no environment-provided entry list are
@@ -139,7 +209,9 @@ extern "C" int pygpi_initialize(void) {
 
     // Make `import cocotb.simulator` inside the simulator process create the
     // module through PyInit_simulator instead of loading the extension file a
-    // second time. Must happen before the interpreter is initialized.
+    // second time. Must happen before the interpreter is initialized. (On
+    // Python <= 3.10 the entry alone stays hidden from submodule imports;
+    // install_builtin_simulator_finder() below fixes that up.)
     if (PyImport_AppendInittab("cocotb.simulator", PyInit_simulator) != 0) {
         // LCOV_EXCL_START
         PYGPI_LOG_ERROR("Failed to register cocotb.simulator with Python");
@@ -186,6 +258,14 @@ extern "C" int pygpi_initialize(void) {
         PYGPI_LOG_ERROR(
             "Unexpected sys.executable value (expected '%ls', got '%ls')",
             interpreter_path, sys_executable);
+        // LCOV_EXCL_STOP
+    }
+
+    // Make the AppendInittab entry findable for `import cocotb.simulator` on
+    // every supported Python version (see the comment on the snippet above).
+    if (install_builtin_simulator_finder() != 0) {
+        // LCOV_EXCL_START
+        return -1;
         // LCOV_EXCL_STOP
     }
 

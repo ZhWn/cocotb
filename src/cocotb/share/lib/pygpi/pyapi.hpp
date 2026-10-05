@@ -50,8 +50,11 @@ extern "C" PyAPI_FUNC(void) PyMem_RawFree(void *ptr);
     X(Py_BuildValue)                \
     X(PyBytes_FromString)           \
     X(PyCallable_Check)             \
+    X(Py_CompileString)             \
     X(Py_DecodeLocale)              \
     X(Py_DecRef)                    \
+    X(PyDict_New)                   \
+    X(PyDict_SetItemString)         \
     X(PyErr_Clear)                  \
     X(PyErr_ExceptionMatches)       \
     X(PyErr_Occurred)               \
@@ -59,6 +62,8 @@ extern "C" PyAPI_FUNC(void) PyMem_RawFree(void *ptr);
     X(PyErr_SetNone)                \
     X(PyErr_SetString)              \
     X(PyErr_WarnEx)                 \
+    X(PyEval_EvalCode)              \
+    X(PyEval_GetBuiltins)           \
     X(Py_Finalize)                  \
     X(PyFloat_FromDouble)           \
     X(PyGILState_Ensure)            \
@@ -175,8 +180,11 @@ bool ensure_loaded();
 #define Py_BuildValue (pygpi::api.p_Py_BuildValue)
 #define PyBytes_FromString (pygpi::api.p_PyBytes_FromString)
 #define PyCallable_Check (pygpi::api.p_PyCallable_Check)
+#define Py_CompileString (pygpi::api.p_Py_CompileString)
 #define Py_DecodeLocale (pygpi::api.p_Py_DecodeLocale)
 #define Py_DecRef (pygpi::api.p_Py_DecRef)
+#define PyDict_New (pygpi::api.p_PyDict_New)
+#define PyDict_SetItemString (pygpi::api.p_PyDict_SetItemString)
 #define PyErr_Clear (pygpi::api.p_PyErr_Clear)
 #define PyErr_ExceptionMatches (pygpi::api.p_PyErr_ExceptionMatches)
 #define PyErr_Occurred (pygpi::api.p_PyErr_Occurred)
@@ -184,6 +192,8 @@ bool ensure_loaded();
 #define PyErr_SetNone (pygpi::api.p_PyErr_SetNone)
 #define PyErr_SetString (pygpi::api.p_PyErr_SetString)
 #define PyErr_WarnEx (pygpi::api.p_PyErr_WarnEx)
+#define PyEval_EvalCode (pygpi::api.p_PyEval_EvalCode)
+#define PyEval_GetBuiltins (pygpi::api.p_PyEval_GetBuiltins)
 #define Py_Finalize (pygpi::api.p_Py_Finalize)
 #define PyFloat_FromDouble (pygpi::api.p_PyFloat_FromDouble)
 #define PyGILState_Ensure (pygpi::api.p_PyGILState_Ensure)
