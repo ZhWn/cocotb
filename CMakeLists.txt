@@ -214,6 +214,13 @@ function(add_cocotb_library TARGET_NAME)
         set_target_properties(${TARGET_NAME} PROPERTIES SUFFIX ".so")
     endif()
 
+    if(WIN32)
+        # cocotb_tools.config.lib_name_path spells Windows libraries without a
+        # lib prefix, so pin it here rather than let toolchains which default
+        # to one (MinGW) decide a name the Python side will not look up.
+        set_target_properties(${TARGET_NAME} PROPERTIES PREFIX "")
+    endif()
+
     target_include_directories(${TARGET_NAME} PRIVATE ${INCLUDE_DIRS})
     # GPI_EXPORTS: gpi.h declarations must be dllexport/default-visible for
     # same-image references, because the GPI functions they declare are

@@ -8,7 +8,22 @@ import sys
 
 import pytest
 
-from cocotb_tools.config import libs_dir
+from cocotb_tools.config import lib_name_path, libs_dir
+
+
+@pytest.mark.skipif(
+    not libs_dir.is_dir(),
+    reason="cocotb libraries are not built here",
+)
+def test_family_lib_exists() -> None:
+    """The library path must name a file the build really produced.
+
+    CMake and cocotb_tools.config have to agree on the file name, and a
+    disagreement only shows up when a simulator fails to load the library,
+    so check it here instead.
+    """
+    path = lib_name_path("vpi", "icarus")
+    assert path.is_file(), path
 
 
 @pytest.mark.skipif(

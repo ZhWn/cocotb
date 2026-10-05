@@ -158,13 +158,12 @@ def lib_name_path(interface: str, simulator: str) -> Path:
 
     if os.name == "nt":
         lib_ext = ".dll"
-    else:
-        lib_ext = ".so"
-
-    # check if compiled with msvc
-    if (libs_dir / "gpi.dll").is_file():
+        # Windows libraries carry no lib prefix, whatever toolchain built
+        # them: add_cocotb_library pins the prefix so the name never has to
+        # be guessed from the build artifacts.
         lib_prefix = ""
     else:
+        lib_ext = ".so"
         lib_prefix = "lib"
 
     lib_name = f"{lib_prefix}cocotb_{library_name}{lib_ext}"
