@@ -13,6 +13,14 @@
 #ifndef COCOTB_ABI_FLI_DISPATCH_HPP_
 #define COCOTB_ABI_FLI_DISPATCH_HPP_
 
+// mti.h only defines the fixed-width integer types itself for MSVC,
+// MinGW and Linux; on other platforms (macOS, for instance) it relies on
+// <sys/types.h>, which newer SDKs no longer provide them through. Include
+// <stdint.h> first so mti.h's declarations always see uint32_t.
+#if !defined(_MSC_VER) && !defined(__MINGW32__) && !defined(__linux)
+#include <stdint.h>
+#endif
+
 #include "_vendor/fli/acc_user.h"
 #include "_vendor/fli/acc_vhdl.h"
 #include "_vendor/fli/mti.h"
