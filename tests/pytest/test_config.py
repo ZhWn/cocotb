@@ -32,6 +32,18 @@ def _lib_stem(path: Path) -> str:
     return path.name.removeprefix("lib").removesuffix(path.suffix)
 
 
+def _entry_library(entry: str) -> str:
+    # gpi_load_libs() reads a library:entry_function pair by splitting on the
+    # last colon, so a Windows drive letter in the path survives. Do the same,
+    # except when what follows the last colon cannot be part of a path:
+    # lib_entry() hands back a bare path for the simulators which discover the
+    # entry point themselves, where the only colon is then the drive letter.
+    idx = entry.rfind(":")
+    if idx != -1 and "/" not in entry[idx + 1 :] and "\\" not in entry[idx + 1 :]:
+        return entry[:idx]
+    return entry
+
+
 @pytest.mark.parametrize(("simulator", "family"), sorted(_FAMILIES.items()))
 def test_lib_name_path_is_per_family(simulator: str, family: str) -> None:
     # The library path only depends on the simulator family, so a
@@ -47,7 +59,7 @@ def test_lib_name_path_is_per_family(simulator: str, family: str) -> None:
 def test_lib_entry_uses_family_library(simulator: str, family: str) -> None:
     for interface in ("vpi", "vhpi", "fli"):
         entry = lib_entry(interface, simulator)
-        library = entry.partition(":")[0]
+        library = _entry_library(entry)
         assert _lib_stem(Path(library)) == f"cocotb_{family}", entry
 
 
