@@ -238,6 +238,24 @@ function(add_cocotb_library TARGET_NAME)
     endif()
     target_link_libraries(${TARGET_NAME} PRIVATE ${GPI_LINK_LIBS})
 
+    if(MSVC)
+        # pyconfig.h nominates the interpreter's import library for the link
+        # with `#pragma comment(lib, ...)`, which with Py_LIMITED_API set is
+        # python3.lib (python3t.lib in a free-threaded build, the versioned
+        # _d.lib name when _DEBUG). Cancel those implicit default libraries:
+        # cocotb resolves every Python C API symbol at runtime and never links
+        # libpython, so a symbol referenced statically must fail as an
+        # unresolved external instead of being satisfied by libpython
+        # silently. This is the Windows counterpart of the
+        # -Wl,--no-undefined gate the Unix builds use.
+        target_link_options(${TARGET_NAME} PRIVATE
+            "/NODEFAULTLIB:python3.lib"
+            "/NODEFAULTLIB:python3t.lib"
+            "/NODEFAULTLIB:python${Python_VERSION_MAJOR}${Python_VERSION_MINOR}_d.lib"
+            "/NODEFAULTLIB:python${Python_VERSION_MAJOR}${Python_VERSION_MINOR}t_d.lib"
+        )
+    endif()
+
     if(WIN32)
         target_compile_definitions(${TARGET_NAME} PRIVATE WIN32)
     endif()
