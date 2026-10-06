@@ -82,6 +82,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     client.start()
+    client.start_watchdog()
     client.wait_until_closed()
     return 0
 

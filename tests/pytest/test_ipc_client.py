@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 
 import pytest
 from ipc_testing import FakeServer, response
@@ -272,6 +273,60 @@ def test_sim_time_cache_scoped_to_callback(fake_server, client):
     fake_server.wait_ack(12)
     assert inside == [(7, 9)]
     assert client.sim_time_cache is None
+
+
+def test_watchdog_reports_stuck_dispatch(fake_server, client, tmp_path):
+    """A dispatch that never returns must dump stacks instead of hanging silently."""
+    release = threading.Event()
+
+    def stuck():
+        release.wait(30.0)
+
+    cb_id = client.register_callback(stuck, ())
+    client.start()
+
+    with open(tmp_path / "watchdog.txt", "w+") as out:
+        client.start_watchdog(interval=0.05, threshold=0.1, repeat=30.0, file=out)
+        fake_server.send_callback(cb_id=cb_id, msg_id=15)
+
+        text = ""
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            # Read through a separate handle: faulthandler writes straight to
+            # the descriptor, so seeking the write handle would let the dump
+            # overwrite what was already written.
+            with open(tmp_path / "watchdog.txt") as f:
+                text = f.read()
+            if "callback dispatch has not returned" in text:
+                break
+
+        release.set()
+        fake_server.wait_ack(15)
+
+    assert "callback dispatch has not returned" in text
+    # The dump has to name the frame that is actually wedged to be useful.
+    assert "in stuck" in text
+
+
+def test_watchdog_quiet_for_healthy_dispatch(fake_server, client, tmp_path):
+    """Normal dispatches must not produce watchdog output."""
+    fired = threading.Event()
+    cb_id = client.register_callback(fired.set, ())
+    client.start()
+
+    with open(tmp_path / "watchdog.txt", "w+") as out:
+        client.start_watchdog(interval=0.05, threshold=0.5, repeat=0.5, file=out)
+        fake_server.send_callback(cb_id=cb_id, msg_id=16)
+        fake_server.wait_ack(16)
+        assert fired.is_set()
+
+        # Long enough that a dispatch still in flight would have been reported.
+        time.sleep(0.7)
+        with open(tmp_path / "watchdog.txt") as f:
+            text = f.read()
+
+    assert "callback dispatch has not returned" not in text
 
 
 def test_unknown_callback_type_warns(fake_server, client, caplog):

@@ -35,10 +35,12 @@ callback is being handled.
 
 from __future__ import annotations
 
+import faulthandler
 import logging
 import os
 import sys
 import threading
+import time
 import traceback
 from typing import Any, Callable
 
@@ -81,6 +83,9 @@ class IpcClient:
         # Simulation time cache, valid while _event_depth > 0.
         self._sim_time_cache: tuple[int, int] | None = None
         self._event_depth = 0
+        # monotonic() at which the outermost callback dispatch started, else
+        # None. Read by the watchdog to spot a dispatch that never returns.
+        self._event_started: float | None = None
 
         self._receiver: threading.Thread | None = None
 
@@ -142,6 +147,63 @@ class IpcClient:
     def wait_until_closed(self, timeout: float | None = None) -> bool:
         """Block until the connection is closed. Returns True when closed."""
         return self._closed.wait(timeout)
+
+    def start_watchdog(
+        self,
+        interval: float = 10.0,
+        threshold: float = 60.0,
+        repeat: float = 60.0,
+        file: Any = None,
+    ) -> None:
+        """Dump every Python stack when a callback dispatch stops making progress.
+
+        The receiver thread is the only reader of the socket, so a dispatch
+        that never returns -- or any thread it is blocked on never returning
+        -- deadlocks the run with both processes otherwise completely silent
+        (observed as 39 minutes of nothing in CI). The dump goes to stderr,
+        which the simulator inherits, so a wedged job shows exactly where each
+        thread is parked instead of stalling without a trace.
+
+        Reports only; it never interrupts or alters the dispatch. Thresholds
+        are deliberately generous: a single dispatch covers everything from
+        importing the test module to the first suspension of the first test.
+
+        Args:
+            file: Where to write. Defaults to ``sys.stderr``; tests pass a
+                real file because ``faulthandler`` needs a usable descriptor.
+        """
+
+        out = sys.stderr if file is None else file
+
+        def watch() -> None:
+            last_dump = float("-inf")
+            while True:
+                time.sleep(interval)
+                if self._closed.is_set():
+                    return
+                started = self._event_started
+                if started is None:
+                    continue
+                now = time.monotonic()
+                if now - started < threshold or now - last_dump < repeat:
+                    continue
+                last_dump = now
+                print(
+                    f"cocotb: callback dispatch has not returned for "
+                    f"{now - started:.0f}s; Python stacks follow",
+                    file=out,
+                    flush=True,
+                )
+                try:
+                    faulthandler.dump_traceback(file=out, all_threads=True)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+                try:
+                    out.flush()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+        threading.Thread(target=watch, name="cocotb.ipc.watchdog", daemon=True).start()
 
     # -- requests -------------------------------------------------------
 
@@ -321,6 +383,8 @@ class IpcClient:
             self._sim_time_cache = (int(sim_time[0]), int(sim_time[1]))
 
         result = 0
+        if self._event_depth == 0:
+            self._event_started = time.monotonic()
         self._event_depth += 1
         try:
             if func_name == "gpi":
@@ -364,6 +428,8 @@ class IpcClient:
             except Exception:  # noqa: BLE001
                 traceback.print_exc(file=sys.stderr)
             self._event_depth -= 1
+            if self._event_depth == 0:
+                self._event_started = None
 
     def _dispatch_log(self, msg: dict[str, Any]) -> None:
         log_func = self._log_func
