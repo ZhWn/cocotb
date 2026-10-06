@@ -354,11 +354,21 @@ def dev_coverage_report(session: nox.Session) -> None:
     else:
         gcov_executable_args = []
     coverage_cpp_xml = Path(".cpp_coverage.xml")
+    # gcovr aborts on a line whose hit count reaches
+    # --gcov-suspicious-hits-threshold (10000 by default), a check meant to
+    # catch the gcov counter corruption described in gcc bug 68080. The
+    # busy-wait in the IPC transport trips it: gcov reports 6.3e9 hits for
+    # the spin loop body in ipc_tcp.cpp, more than a select() loop can
+    # execute in the time the job runs, so the number is corrupt. A
+    # threshold of 0 disables the check; the hit counts are then reported
+    # as gcov saw them instead of being zeroed out by the ignore path.
+    gcov_suspicious_hits_args = ["--gcov-suspicious-hits-threshold", "0"]
     session.run(
         "gcovr",
         "--cobertura",
         "--output",
         str(coverage_cpp_xml),
+        *gcov_suspicious_hits_args,
         ".",
         *gcov_executable_args,
     )
@@ -377,6 +387,7 @@ def dev_coverage_report(session: nox.Session) -> None:
         "gcovr",
         "--print-summary",
         "--txt",
+        *gcov_suspicious_hits_args,
         *gcov_executable_args,
     )
 
