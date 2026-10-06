@@ -51,7 +51,11 @@ jobs:
 
     name: ${{matrix.name}}
     runs-on: ${{matrix.runs-on}}
-    timeout-minutes: 60
+    # macOS runners are slower than Ubuntu, and the icarus row on
+    # macos-15-intel needs about an hour on its own for
+    # test_trigger_memory_leak. Give them room for that, but keep the tighter
+    # budget elsewhere.
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 100 || 60 }}
 
     env:
       SIM: ${{matrix.sim}}
@@ -260,9 +264,10 @@ jobs:
       continue-on-error: ${{matrix.may-fail || false}}
       # The macOS runners are 2 to 3 times slower than Ubuntu for the same
       # suites, and test_trigger_memory_leak waits on a trigger 100_000 times
-      # per test, so they need a wider budget than the one that only has to
-      # catch a wedged run. Ubuntu keeps the tighter one.
-      timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 40 }}
+      # per test: on macos-15-intel it needs ~51 minutes by itself. Give the
+      # macOS rows room for that, while Ubuntu keeps the budget that only has
+      # to catch a wedged run.
+      timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 80 || 40 }}
       run: |
         if [ "${{matrix.self-hosted}}" == "true" ]; then
           module load "${{ matrix.sim-version }}"
