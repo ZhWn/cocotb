@@ -197,6 +197,24 @@ std::wstring widen_utf8(const std::string &s) {
     return out;
 }
 
+// Wide -> UTF-8, for logging wide command lines through gpi_log's
+// printf-style (narrow) formatter.
+std::string narrow_utf8(const std::wstring &s) {
+    if (s.empty()) {
+        return std::string();
+    }
+    int n = WideCharToMultiByte(CP_UTF8, 0, s.c_str(),
+                                static_cast<int>(s.size()), nullptr, 0,
+                                nullptr, nullptr);
+    if (n <= 0) {
+        return std::string();
+    }
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
+                        &out[0], n, nullptr, nullptr);
+    return out;
+}
+
 wchar_t env_key_lower(wchar_t ch) {
     return (ch >= L'A' && ch <= L'Z')
                ? static_cast<wchar_t>(ch - L'A' + L'a')
@@ -361,12 +379,17 @@ bool spawn_child(const std::string &python_bin, const std::string &module,
     // extended per process).
     std::vector<wchar_t> env_block = build_env_block(pythonpath_zip);
 
-    BOOL ok = CreateProcessW(nullptr, &buf[0], nullptr, nullptr, TRUE,
-                             CREATE_SUSPENDED, env_block.data(), nullptr, &si,
-                             &pi);
+    // An explicitly passed environment block must be flagged as Unicode:
+    // without CREATE_UNICODE_ENVIRONMENT the block above would be parsed as
+    // ANSI (every other byte), which CreateProcessW rejects with
+    // ERROR_INVALID_PARAMETER (87).
+    BOOL ok =
+        CreateProcessW(nullptr, &buf[0], nullptr, nullptr, TRUE,
+                       CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                       env_block.data(), nullptr, &si, &pi);
     if (!ok) {
         IPC_LOG_ERROR("Failed to spawn Python process '%s' (error %lu)",
-                      cmdline.c_str(), GetLastError());
+                      narrow_utf8(cmdline).c_str(), GetLastError());
         if (job != nullptr) {
             CloseHandle(job);
         }
@@ -399,7 +422,11 @@ bool spawn_child(const std::string &python_bin, const std::string &module,
 bool spawn_child(const std::string &python_bin, const std::string &module,
                  const std::string &endpoint,
                  const std::string &pythonpath_zip) {
+#ifdef __linux__
+    // Only needed for the Linux PR_SET_PDEATHSIG race check below; must be
+    // captured before fork() so the child can compare against our pid.
     pid_t parent_pid = getpid();
+#endif
     pid_t pid = fork();
     if (pid < 0) {
         IPC_LOG_ERROR("fork() failed: %s", strerror(errno));
