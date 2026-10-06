@@ -123,17 +123,19 @@ def test_send_after_close_raises(server):
 
 
 def test_recv_after_close_returns_none(server):
-    transport, _conn = _connect(server)
+    transport, conn = _connect(server)
     transport.close()
     assert transport.recv_frame() is None
+    conn.close()
 
 
 def test_close_is_idempotent(server):
-    transport, _conn = _connect(server)
+    transport, conn = _connect(server)
     assert transport.connected
     transport.close()
     transport.close()
     assert not transport.connected
+    conn.close()
 
 
 def test_oversized_frame_length_rejected(server):

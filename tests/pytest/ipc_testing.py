@@ -177,9 +177,17 @@ class FakeServer:
         raise AssertionError(f"no callback_ack received for id {msg_id}")
 
     def close(self) -> None:
+        # shutdown() before close(): on POSIX, close() from this thread does
+        # not abort a recv() blocked in the _run thread (the syscall holds a
+        # file reference), so no FIN would be sent and the peer would never
+        # see EOF.  shutdown() unblocks the reader and sends FIN regardless.
         for sock in (self.conn, self.listener):
             if sock is None:
                 continue
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             try:
                 sock.close()
             except OSError:

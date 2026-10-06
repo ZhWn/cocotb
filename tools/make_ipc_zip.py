@@ -47,10 +47,11 @@ import argparse
 import hashlib
 import importlib.util
 import marshal
+import os
 import re
+import subprocess
 import sys
 import zipfile
-from importlib import _bootstrap_external, _imp
 from pathlib import Path
 
 # Fixed timestamp for every zip entry so builds are reproducible.
@@ -96,7 +97,7 @@ def compile_pyc(source: bytes, code_filename: str) -> bytes | None:
     except (SyntaxError, ValueError) as exc:
         print(f"warning: cannot compile {code_filename}: {exc}", file=sys.stderr)
         return None
-    source_hash = _imp.source_hash(_bootstrap_external._RAW_MAGIC_NUMBER, source)
+    source_hash = importlib.util.source_hash(source)
     # PEP 552 pyc: magic (4) + flags (4, hash-based | checked) +
     # source hash (8) + marshalled code.
     return (
@@ -189,4 +190,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # Reproducibility guard: marshalled set/frozenset constants are written in
+    # iteration order, which depends on the interpreter's hash seed (visible
+    # on Python <= 3.10).  When no seed was chosen for us, re-run once with a
+    # fixed one so two builds of the same tree are byte-identical.
+    if "PYTHONHASHSEED" not in os.environ:
+        os.environ["PYTHONHASHSEED"] = "0"
+        raise SystemExit(subprocess.call([sys.executable, *sys.argv]))
     raise SystemExit(main())

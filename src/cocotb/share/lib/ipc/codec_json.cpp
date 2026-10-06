@@ -30,9 +30,10 @@ std::string base64_encode(const std::string &in) {
     out.reserve(((in.size() + 2) / 3) * 4);
     size_t i = 0;
     while (i + 3 <= in.size()) {
-        uint32_t v = (static_cast<uint8_t>(in[i]) << 16) |
-                     (static_cast<uint8_t>(in[i + 1]) << 8) |
-                     static_cast<uint8_t>(in[i + 2]);
+        uint32_t v =
+            (static_cast<uint32_t>(static_cast<uint8_t>(in[i])) << 16) |
+            (static_cast<uint32_t>(static_cast<uint8_t>(in[i + 1])) << 8) |
+            static_cast<uint32_t>(static_cast<uint8_t>(in[i + 2]));
         out.push_back(kBase64Alphabet[(v >> 18) & 63]);
         out.push_back(kBase64Alphabet[(v >> 12) & 63]);
         out.push_back(kBase64Alphabet[(v >> 6) & 63]);
@@ -41,14 +42,15 @@ std::string base64_encode(const std::string &in) {
     }
     size_t rem = in.size() - i;
     if (rem == 1) {
-        uint32_t v = static_cast<uint8_t>(in[i]) << 16;
+        uint32_t v = static_cast<uint32_t>(static_cast<uint8_t>(in[i])) << 16;
         out.push_back(kBase64Alphabet[(v >> 18) & 63]);
         out.push_back(kBase64Alphabet[(v >> 12) & 63]);
         out.push_back('=');
         out.push_back('=');
     } else if (rem == 2) {
-        uint32_t v = (static_cast<uint8_t>(in[i]) << 16) |
-                     (static_cast<uint8_t>(in[i + 1]) << 8);
+        uint32_t v =
+            (static_cast<uint32_t>(static_cast<uint8_t>(in[i])) << 16) |
+            (static_cast<uint32_t>(static_cast<uint8_t>(in[i + 1])) << 8);
         out.push_back(kBase64Alphabet[(v >> 18) & 63]);
         out.push_back(kBase64Alphabet[(v >> 12) & 63]);
         out.push_back(kBase64Alphabet[(v >> 6) & 63]);
@@ -85,7 +87,7 @@ bool base64_decode(const std::string &in, std::string &out) {
     for (size_t i = 0; i < in.size(); i += 4) {
         int pad = 0;
         uint32_t v = 0;
-        for (int j = 0; j < 4; ++j) {
+        for (size_t j = 0; j < 4; ++j) {
             char c = in[i + j];
             if (c == '=') {
                 // Padding only allowed in the last quantum.

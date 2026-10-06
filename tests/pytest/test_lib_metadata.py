@@ -15,11 +15,15 @@ from cocotb_tools.config import libs_dir
     sys.platform != "linux",
     reason="SONAME is Linux-specific shared library metadata",
 )
-def test_libgpi_has_soname() -> None:
-    libgpi = libs_dir / "libgpi.so"
-    output = subprocess.check_output(
-        ["readelf", "-d", libgpi],
-        text=True,
-    )
+def test_interface_libs_have_soname() -> None:
+    if not libs_dir.is_dir():
+        pytest.skip("interface libraries not built/installed")
+    libs = sorted(libs_dir.glob("libcocotb*.so"))
+    assert libs, f"no interface libraries found in {libs_dir}"
+    for lib in libs:
+        output = subprocess.check_output(
+            ["readelf", "-d", lib],
+            text=True,
+        )
 
-    assert "Library soname: [libgpi.so]" in output
+        assert f"Library soname: [{lib.name}]" in output, lib.name

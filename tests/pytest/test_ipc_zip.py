@@ -14,7 +14,6 @@ import subprocess
 import sys
 import zipfile
 import zipimport
-from importlib import _bootstrap_external, _imp
 from pathlib import Path
 
 import pytest
@@ -86,7 +85,7 @@ def make_pyc(
     """
     compiled = source if code_source is None else code_source
     code = compile(compiled, "m.py", "exec")
-    source_hash = _imp.source_hash(_bootstrap_external._RAW_MAGIC_NUMBER, source)
+    source_hash = importlib.util.source_hash(source)
     magic = importlib.util.MAGIC_NUMBER
     if bad_magic:
         magic = b"BADM"
