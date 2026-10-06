@@ -194,6 +194,16 @@ def _setup_gpi_logger() -> None:
     # Initialize PyGPI logging
     cocotb.simulator.initialize_logger(_log_from_c, logging.getLogger)
 
+    # Mirror the level configured *before* this monkeypatch was installed onto
+    # the simulator side. ``cocotb.logging:_configure`` runs as an earlier
+    # entry point than ``cocotb.logging:_init``, so ``default_config()`` has
+    # already called ``gpi.setLevel()`` through the unpatched method and the
+    # C-side level would otherwise stay at NOTSET. While NOTSET the C side
+    # forwards every record and lets the child decide, which is correct but
+    # makes each DEBUG/TRACE message a full IPC round trip the child then
+    # throws away -- a large cost in tight loops such as trigger benchmarks.
+    cocotb.simulator.set_gpi_log_level(gpi_logger.getEffectiveLevel())
+
 
 def _configure() -> None:
     """Configure basic logging."""
