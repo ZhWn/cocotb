@@ -28,6 +28,16 @@ There is exactly one designated reader of socket frames at any time:
 Callbacks run on the thread that reads them (normally the receiver thread),
 so a callback may call :meth:`request` reentrantly.
 
+A blocking :meth:`request` is only safe from a thread the receiver thread is
+not waiting for. Finalizers break that rule: the garbage collector runs
+``__del__`` on whichever thread happens to trigger the collection, and a
+bridge thread (see :mod:`cocotb._bridge`) is a likely candidate because
+running user code is what allocates. The receiver thread is parked in
+``run_bridge_threads`` waiting for exactly that thread while it runs, so a
+:meth:`request` from inside a finalizer wedges the run: the finalizer waits
+for the receiver to dispatch a response it will never read. Use
+:meth:`notify` there -- it sends the request without waiting for the answer.
+
 The last simulation time seen on a callback is cached so
 ``cocotb.simulator.get_sim_time()`` can answer without a round trip while a
 callback is being handled.
@@ -258,6 +268,33 @@ class IpcClient:
         if entry["error"] is not None:
             raise RuntimeError(entry["error"])
         return entry["value"]
+
+    def notify(self, method: str, *args: Any) -> None:
+        """Send a request and discard its response.
+
+        Unlike :meth:`request` this never waits for an answer, so it is the
+        only safe way to reach the simulator from a thread the receiver
+        thread may be parked on -- finalizers, typically (see the class
+        docstring). The response is dropped by :meth:`_dispatch` because no
+        pending entry matches it.
+
+        Requests keep their relative order on the wire, so a
+        ``delete_clock`` sent this way is served before any request sent
+        afterwards.
+        """
+        with self._entry_cond:
+            # Share the id counter with request(): ids must stay unique
+            # even when a finalizer fires while a request is in flight.
+            msg_id = self._next_msg_id
+            self._next_msg_id += 1
+        self._send(
+            {
+                "type": "request",
+                "id": msg_id,
+                "method": method,
+                "args": list(args),
+            }
+        )
 
     def batch(self, ops: list[tuple[str, tuple[Any, ...]]]) -> list[Any]:
         """Execute several requests in one round trip.

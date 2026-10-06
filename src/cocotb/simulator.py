@@ -408,7 +408,11 @@ class cpp_clock(_HandleWrapper):
         if client is None or not client.connected:
             return
         try:
-            client.request("delete_clock", self._hdl)
+            # notify(), not request(): the collector can run this finalizer
+            # on a bridge thread, and the receiver thread is parked waiting
+            # for exactly that thread, so it cannot answer a request made
+            # from here -- waiting for one wedges the run.
+            client.notify("delete_clock", self._hdl)
         except BaseException:  # noqa: BLE001, S110
             # Never propagate from __del__ (e.g. during interpreter
             # shutdown or after the connection has been lost).

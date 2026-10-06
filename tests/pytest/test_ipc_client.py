@@ -169,6 +169,51 @@ def test_concurrent_requests_with_receiver_running(fake_server, client):
     assert results == {n: f"echo-op{n}" for n in range(4)}
 
 
+def test_notify_never_waits_for_the_receiver(fake_server, client):
+    """A request whose answer is discarded must survive a wedged dispatch.
+
+    The receiver thread is the only reader of the socket, so an answer to
+    anything another thread sends only arrives once the receiver gets back
+    to reading. ``cpp_clock.__del__`` is such a case: the collector runs it
+    on a bridge thread while the receiver thread is parked in
+    ``run_bridge_threads`` waiting for that very thread, so a finalizer that
+    waited for a response deadlocked the run.
+    """
+    fake_server.on_request = lambda msg: response(msg, None)
+    in_dispatch = threading.Event()
+    release = threading.Event()
+    notified = threading.Event()
+
+    def stuck():
+        in_dispatch.set()
+        release.wait(30.0)
+
+    cb_id = client.register_callback(stuck, ())
+    client.start()
+    fake_server.send_callback(cb_id=cb_id, msg_id=20)
+    assert in_dispatch.wait(10)
+
+    def finalizer():
+        client.notify("delete_clock", 7)
+        notified.set()
+
+    thread = threading.Thread(target=finalizer)
+    thread.start()
+    try:
+        assert notified.wait(10), "notify() waited for an answer"
+    finally:
+        release.set()
+        thread.join(timeout=10)
+
+    fake_server.wait_ack(20)
+    assert [msg["method"] for msg in fake_server.requests] == ["delete_clock"]
+
+    # The response the receiver reads late must not be matched to a later
+    # request.
+    fake_server.on_request = lambda msg: response(msg, "pong")
+    assert client.request("ping") == "pong"
+
+
 # ---------------------------------------------------------------------------
 # Callbacks
 # ---------------------------------------------------------------------------
@@ -296,10 +341,15 @@ def test_watchdog_reports_stuck_dispatch(fake_server, client, tmp_path):
             # Read through a separate handle: faulthandler writes straight to
             # the descriptor, so seeking the write handle would let the dump
             # overwrite what was already written.
-            with open(tmp_path / "watchdog.txt") as f:
-                text = f.read()
-            if "callback dispatch has not returned" in text:
-                break
+            text = (tmp_path / "watchdog.txt").read_text()
+            if "callback dispatch has not returned" not in text:
+                continue
+            # The header is written before the dump, so wait for the dump to
+            # land before asserting on its contents.
+            while "Current thread" not in text and time.monotonic() < deadline:
+                time.sleep(0.1)
+                text = (tmp_path / "watchdog.txt").read_text()
+            break
 
         release.set()
         fake_server.wait_ack(15)

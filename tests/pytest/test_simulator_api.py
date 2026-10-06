@@ -24,6 +24,9 @@ class StubClient:
     def __init__(self, results=None):
         self.connected = True
         self.calls: list[tuple[str, tuple]] = []
+        # Methods sent with IpcClient.notify() -- requests whose response the
+        # caller does not wait for.
+        self.notifies: list[tuple[str, tuple]] = []
         # method -> value, exception instance, or callable(*args)
         self.results = results if results is not None else {}
         self.sim_time_cache = None
@@ -43,6 +46,9 @@ class StubClient:
         if callable(result):
             return result(*args)
         return result
+
+    def notify(self, method, *args):
+        self.notifies.append((method, args))
 
     def batch(self, ops):
         # Mirrors cocotb._ipc.IpcClient.batch against the scripted results.
@@ -622,11 +628,14 @@ def test_clock_deleted_skips_stop(stub):
 
 def test_clock_delete_on_gc(stub):
     stub.results["clock_create"] = 5
-    stub.results["delete_clock"] = None
     clock = cocotb.simulator.clock_create(cocotb.simulator.sim_obj(4))
     del clock
     gc.collect()
-    assert stub.calls[-1] == ("delete_clock", (5,))
+    # notify(), not request(): the finalizer can run on a bridge thread, and
+    # waiting for a response there deadlocks the run, so the deletion must be
+    # sent without waiting for one.
+    assert stub.notifies[-1] == ("delete_clock", (5,))
+    assert ("delete_clock", (5,)) not in stub.calls
 
 
 def test_clock_delete_skipped_when_disconnected(stub):
@@ -635,7 +644,7 @@ def test_clock_delete_skipped_when_disconnected(stub):
     stub.connected = False
     del clock
     gc.collect()
-    assert ("delete_clock", (5,)) not in stub.calls
+    assert ("delete_clock", (5,)) not in stub.notifies
 
 
 # ---------------------------------------------------------------------------
