@@ -15,6 +15,14 @@
 #ifndef COCOTB_ABI_FLI_DISPATCH_HPP_
 #define COCOTB_ABI_FLI_DISPATCH_HPP_
 
+#include <stdint.h>
+
+// Before the vendor headers: mti.h needs the fixed-width integer types but
+// only declares them itself on MSVC, includes <inttypes.h> on Linux and
+// falls back to <sys/types.h> everywhere else -- and the macOS SDK's
+// <sys/types.h> has no uint32_t. The other FLI translation units get it from
+// the C++ headers they include first (gpi.h, <map>); this one includes the
+// vendor headers before any of them.
 #include "_vendor/fli/acc_user.h"
 #include "_vendor/fli/acc_vhdl.h"
 #include "_vendor/fli/mti.h"
