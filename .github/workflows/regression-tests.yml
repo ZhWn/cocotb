@@ -258,7 +258,11 @@ jobs:
       id: unixtesting
       if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
       continue-on-error: ${{matrix.may-fail || false}}
-      timeout-minutes: 40
+      # The macOS runners are 2 to 3 times slower than Ubuntu for the same
+      # suites, and test_trigger_memory_leak waits on a trigger 100_000 times
+      # per test, so they need a wider budget than the one that only has to
+      # catch a wedged run. Ubuntu keeps the tighter one.
+      timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 40 }}
       run: |
         if [ "${{matrix.self-hosted}}" == "true" ]; then
           module load "${{ matrix.sim-version }}"
