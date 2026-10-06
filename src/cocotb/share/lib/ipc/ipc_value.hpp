@@ -87,7 +87,13 @@ class IpcValue {
     bool is_int() const { return type_ == IpcType::Int; }
     bool is_float() const { return type_ == IpcType::Float; }
     bool is_numeric() const {
-        return type_ == IpcType::Int || type_ == IpcType::Float;
+        // Bool counts as numeric: Python's bool is an int subclass and the
+        // legacy FFI accepted `dut.x.value = False` by converting it with
+        // PyLong_AsLong. The binary codec keeps bools distinct because
+        // Clock.start passes one where the C side wants a real bool, so the
+        // widening has to happen here.
+        return type_ == IpcType::Int || type_ == IpcType::Float ||
+               type_ == IpcType::Bool;
     }
     bool is_string() const { return type_ == IpcType::String; }
     bool is_bytes() const { return type_ == IpcType::Bytes; }
@@ -97,13 +103,17 @@ class IpcValue {
     bool get_bool() const { return b_; }
 
     // Ints are returned as-is; floats are truncated toward zero so that a
-    // JSON-encoded integer arriving as a float still works.
+    // JSON-encoded integer arriving as a float still works; bools widen to
+    // 0/1 for the same reason.
     int64_t get_int() const {
         if (type_ == IpcType::Int) {
             return i_;
         }
         if (type_ == IpcType::Float) {
             return static_cast<int64_t>(d_);
+        }
+        if (type_ == IpcType::Bool) {
+            return b_ ? 1 : 0;
         }
         return 0;
     }
@@ -114,6 +124,9 @@ class IpcValue {
         }
         if (type_ == IpcType::Int) {
             return static_cast<double>(i_);
+        }
+        if (type_ == IpcType::Bool) {
+            return b_ ? 1.0 : 0.0;
         }
         return 0.0;
     }
