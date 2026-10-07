@@ -20,19 +20,19 @@ async def ipc_smoke_test(dut) -> None:
 
     dut.din.value = 0xAB
     dut.rst.value = 1
-    await Timer(2, units="ns")
+    await Timer(2, unit="ns")
     dut.rst.value = 0
-    await Timer(2, units="ns")
+    await Timer(2, unit="ns")
 
     # Write and read back through the IPC signal paths.
     dut.dout.value = 0xAB
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.dout.value) == 0xAB, hex(int(dut.dout.value))
 
     # Direct assignment through the IPC set-signal path.
     dut.dout.value = 0xC3
-    await Timer(1, units="ns")
-    assert dut.dout.value.binstr == "11000011"
+    await Timer(1, unit="ns")
+    assert str(dut.dout.value) == "11000011"
 
     # A request that returns data (simulator identity round-trip).
     sim_name = cocotb.SIM_NAME
