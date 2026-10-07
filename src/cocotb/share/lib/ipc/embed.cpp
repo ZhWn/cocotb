@@ -21,6 +21,7 @@
 #include <gpi.h>
 
 #include <cerrno>  // errno, ERANGE
+#include <climits>  // UINT_MAX
 #include <cstdint>  // uint64_t
 #include <cstdio>
 #include <cstdlib>  // getenv, strtoul
