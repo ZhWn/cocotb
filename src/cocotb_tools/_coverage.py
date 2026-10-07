@@ -5,10 +5,16 @@ from __future__ import annotations
 
 from cocotb_tools import _env
 
+_started = False
+
 
 def start_cocotb_library_coverage() -> None:  # pragma: no cover
+    global _started
+    if _started:
+        return
     if not _env.get_bool("COCOTB_LIBRARY_COVERAGE"):
         return
+    _started = True
     try:
         import coverage  # noqa: PLC0415
     except (ImportError, ModuleNotFoundError):

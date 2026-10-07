@@ -18,7 +18,7 @@ from ._transport import SocketTransport
 def main() -> None:
     """Entry point of the Python process spawned by the simulator.
 
-    Usage: ``python -m cocotb.ipc <endpoint>``
+    Usage: ``python -m pygpi.ipc <endpoint>``
 
     ``<endpoint>`` is either a decimal port number (loopback TCP, the legacy
     format) or ``shm:<token>`` for the shared-memory transport. The message

@@ -4,7 +4,7 @@
 """Pure Python implementation of the `cocotb.simulator` API.
 
 This module is loaded in the Python process spawned by the simulator (see
-``python -m cocotb.ipc``) and forwards calls to the simulator process over an
+``python -m pygpi.ipc``) and forwards calls to the simulator process over an
 IPC connection. Importing this module outside of a simulation context
 succeeds, but calling most functions raises :exc:`RuntimeError`.
 """

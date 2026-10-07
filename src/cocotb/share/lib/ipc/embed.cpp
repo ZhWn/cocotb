@@ -10,7 +10,7 @@
 // The GPI_USERS entry point `initialize` is loaded by the GPI layer after the
 // simulator interface library has been registered. It:
 //   1. starts the IPC transport (a loopback TCP server),
-//   2. spawns the Python child process (`PYGPI_PYTHON_BIN -m cocotb.ipc`),
+//   2. spawns the Python child process (`PYGPI_PYTHON_BIN -m pygpi.ipc`),
 //   3. registers the GPI callbacks that drive the child process, and
 //   4. serves requests from the child process reentrantly while waiting for
 //      callback acknowledgements.
@@ -187,13 +187,13 @@ static int spawn_python_child(const std::string &endpoint) {
         return -1;
     }
 
-    IPC_LOG_INFO("Starting Python interpreter %s -m cocotb.ipc %s",
+    IPC_LOG_INFO("Starting Python interpreter %s -m pygpi.ipc %s",
                  python_bin, endpoint.c_str());
 
 #ifdef _WIN32
     std::string cmdline = "\"";
     cmdline += python_bin;
-    cmdline += "\" -m cocotb.ipc ";
+    cmdline += "\" -m pygpi.ipc ";
     cmdline += endpoint;
 
     std::vector<char> mutable_cmdline(cmdline.begin(), cmdline.end());
@@ -243,7 +243,7 @@ static int spawn_python_child(const std::string &endpoint) {
         return -1;
     }
     if (pid == 0) {
-        execl(python_bin, python_bin, "-m", "cocotb.ipc",
+        execl(python_bin, python_bin, "-m", "pygpi.ipc",
               endpoint.c_str(), static_cast<char *>(nullptr));
         _exit(127);
     }
