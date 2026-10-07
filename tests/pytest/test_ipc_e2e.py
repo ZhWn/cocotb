@@ -22,8 +22,10 @@ pytestmark = pytest.mark.simulator_required
 tests_dir = Path(__file__).resolve().parent.parent
 ipc_smoke_dir = tests_dir / "designs" / "ipc_smoke"
 # The regression engine imports the test module by name; the runner forwards
-# sys.path to the Python child via PYTHONPATH.
-sys.path.insert(0, str(tests_dir / "test_cases"))
+# sys.path to the Python child via PYTHONPATH. The module lives next to the
+# design, not in tests/test_cases, which the Makefile driver treats as a
+# directory of regression suites.
+sys.path.insert(0, str(ipc_smoke_dir))
 test_module = "test_ipc_smoke_tb"
 
 
