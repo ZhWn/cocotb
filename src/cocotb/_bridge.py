@@ -109,6 +109,19 @@ def bridge(
     return wrapper
 
 
+# While the scheduler waits for a bridge thread, wake up this often to service
+# the simulator: a bridge thread that calls into the GPI blocks until its
+# request is answered, and only the waiting thread can read that answer.
+_SERVICE_INTERVAL = 0.001
+
+
+def _service_simulator() -> None:
+    """Answer anything the simulator sent while a bridge thread is running."""
+    simulator = sys.modules.get("cocotb.simulator")
+    if simulator is not None:
+        simulator._service_pending()
+
+
 class external_state(IntEnum):
     INIT = 0
     RUNNING = 1
@@ -167,7 +180,8 @@ class external_waiter(Generic[Result]):
 
         with self.cond:
             while self.state == external_state.RUNNING:
-                self.cond.wait()
+                self.cond.wait(timeout=_SERVICE_INTERVAL)
+                _service_simulator()
 
             if debug.debug:
                 if self.state == external_state.EXITED:

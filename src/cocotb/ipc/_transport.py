@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 from __future__ import annotations
 
+import select
 import socket
 import struct
 
@@ -53,6 +54,17 @@ class SocketTransport:
         payload = bytes(self._recv_buffer[4 : 4 + length])
         del self._recv_buffer[: 4 + length]
         return payload
+
+    def has_data(self, timeout: float = 0.0) -> bool:
+        """Return whether a message is available within *timeout* seconds.
+
+        Buffered bytes count as available, since :meth:`recv_frame` completes
+        the frame without blocking.
+        """
+        assert self._sock is not None, "transport is not connected"
+        if self._recv_buffer:
+            return True
+        return bool(select.select([self._sock], [], [], timeout)[0])
 
     def close(self) -> None:
         if self._sock is not None:

@@ -65,6 +65,18 @@ def _get_client() -> IpcClient:
     return _client
 
 
+def _service_pending(timeout: float = 0.0) -> bool:
+    """Service the simulator from the thread that owns its message stream.
+
+    For internal use by the bridge machinery: a bridge thread may block on the
+    simulator while the scheduler thread waits for it, and only the scheduler
+    thread can answer it. Returns whether a message was dispatched.
+    """
+    if _client is None:
+        return False
+    return _client.service_pending(timeout)
+
+
 class _Handle:
     """Base class for handles returned by the simulator.
 

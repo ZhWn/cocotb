@@ -41,6 +41,7 @@ import mmap
 import os
 import struct
 import threading
+import time
 from typing import Callable
 
 _MAGIC = 0x434F434F54494250  # "COCOTBIP"
@@ -363,6 +364,32 @@ class ShmTransport:
                 self._closed = True
                 return None
             self._sems["resp"].wait()
+
+    def has_data(self, timeout: float = 0.0) -> bool:
+        """Return whether a complete message is available within *timeout* seconds.
+
+        The response ring is polled instead of taking the ``resp`` semaphore,
+        so that the token posted for the message is left for
+        :meth:`recv_frame` to consume.
+        """
+        region = self._region
+        if region is None:
+            raise OSError("transport is not connected")
+        deadline = time.monotonic() + timeout
+        while True:
+            prod = region.u64(_OFF_RESP_PROD)
+            cons = region.u64(_OFF_RESP_CONS)
+            avail = prod - cons
+            if avail >= 4:
+                hdr = region.ring_read(region.resp_off, cons, 4)
+                length = struct.unpack("<I", hdr)[0]
+                if avail >= 4 + length:
+                    return True
+            if self._closed or region.u32(_OFF_STATE) == 2:
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.0005)
 
     def close(self) -> None:
         if self._closed:

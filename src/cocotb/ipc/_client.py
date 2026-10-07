@@ -131,6 +131,24 @@ class IpcClient:
             raise RuntimeError(entry["error"])
         return entry["result"]
 
+    def service_pending(self, timeout: float = 0.0) -> bool:
+        """Dispatch one incoming message, if one arrives within *timeout* seconds.
+
+        The simulator sometimes must be serviced from the thread that owns the
+        message stream while that thread is blocked waiting for something that
+        itself talks to the simulator, such as a bridge thread calling into the
+        GPI. Returns whether a message was dispatched.
+        """
+        if threading.current_thread() is not self._receiver:
+            return False
+        if self._closed.is_set():
+            return False
+        if not self._transport.has_data(timeout):
+            return False
+        with self._recv_lock:
+            self._read_and_dispatch()
+        return True
+
     def _read_and_dispatch(self) -> None:
         if self._closed.is_set():
             raise RuntimeError("IPC connection to simulator lost")
