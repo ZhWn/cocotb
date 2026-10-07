@@ -128,8 +128,33 @@ bool wait_sem(void *sem, long timeout_ms) {
         deadline.tv_sec += 1;
         deadline.tv_nsec -= 1000000000L;
     }
+#ifdef __APPLE__
+    // Darwin has no sem_timedwait(); poll sem_trywait() until the deadline.
+    for (;;) {
+        if (sem_trywait(s) == 0) {
+            return true;
+        }
+        if (errno != EAGAIN) {
+            return false;
+        }
+        struct timespec now;
+        if (clock_gettime(CLOCK_REALTIME, &now) != 0) {
+            return false;
+        }
+        if (now.tv_sec > deadline.tv_sec ||
+            (now.tv_sec == deadline.tv_sec &&
+             now.tv_nsec >= deadline.tv_nsec)) {
+            return false;
+        }
+        struct timespec nap;
+        nap.tv_sec = 0;
+        nap.tv_nsec = 1000000L;  // 1 ms
+        (void)nanosleep(&nap, nullptr);
+    }
+#else
     return sem_timedwait(s, &deadline) == 0;
 #endif
+#endif  // _WIN32
 }
 
 bool post_sem(void *sem) {
