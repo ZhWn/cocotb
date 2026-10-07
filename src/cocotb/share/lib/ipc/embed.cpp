@@ -300,7 +300,9 @@ extern "C" IPC_EXPORT void initialize(void) {
 #if defined(_WIN32)
         Sleep(static_cast<DWORD>(sleep_time) * 1000);
 #else
-        sleep(sleep_time);
+        // sleep() takes an unsigned int; the value was checked against
+        // UINT_MAX above.
+        sleep(static_cast<unsigned int>(sleep_time));
 #endif
     }
 
