@@ -27,6 +27,7 @@ from itertools import chain
 from pathlib import Path
 from typing import (
     Any,
+    ClassVar,
     Generic,
     TextIO,
     TypeVar,
@@ -95,7 +96,8 @@ _sv_escape_translate_table = str.maketrans(_sv_escapes)
 def _sv_escape_string(value: str) -> str:
     if any(ord(c) >= 128 for c in value):
         warnings.warn(
-            f"String {value!r} contains non-ASCII characters which may not be supported in SystemVerilog"
+            f"String {value!r} contains non-ASCII characters which may not be supported in SystemVerilog",
+            stacklevel=1,
         )
     return '"' + value.translate(_sv_escape_translate_table) + '"'
 
@@ -106,7 +108,8 @@ _vhdl_escape_translate_table = str.maketrans({'"': '""'})
 def _vhdl_escape_string(value: str) -> str:
     if any(ord(c) < 32 or ord(c) >= 127 for c in value):
         warnings.warn(
-            f"String {value!r} contains control characters which may not be supported in VHDL"
+            f"String {value!r} contains control characters which may not be supported in VHDL",
+            stacklevel=1,
         )
     return '"' + value.translate(_vhdl_escape_translate_table) + '"'
 
@@ -191,7 +194,7 @@ _vhdl_extensions = (".vhd", ".vhdl")
 
 def _determine_file_type(
     filename: PathLike,
-) -> type[Verilog] | type[VHDL] | type[VerilatorControlFile]:
+) -> type[Verilog | VHDL | VerilatorControlFile]:
     ext = Path(filename).suffix
     if ext in _verilog_extensions:
         return Verilog
@@ -206,7 +209,7 @@ def _determine_file_type(
 
 
 class Runner(ABC):
-    supported_gpi_interfaces: dict[str, list[str]] = {}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {}
 
     def __init__(self) -> None:
         self._simulator_in_path()
@@ -884,7 +887,7 @@ class Icarus(Runner):
        * Does not support the ``pre_cmd`` argument to :meth:`~Runner.test`.
     """
 
-    supported_gpi_interfaces = {"verilog": ["vpi"]}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"verilog": ["vpi"]}
 
     def _simulator_in_path(self) -> None:
         if shutil.which("iverilog") is None:
@@ -1015,7 +1018,7 @@ class Icarus(Runner):
                 *self._get_sim_cmd_prefix(),
                 "vvp",
                 "-m",
-                cocotb_tools.config.lib_name_path("vpi", "icarus").as_posix(),
+                cocotb_tools.config.lib_entry("vpi", "icarus"),
                 *self.test_args,
                 str(self.sim_file),
                 *plusargs,
@@ -1032,7 +1035,10 @@ class Questa(Runner):
        * Does not support the ``timescale`` argument to :meth:`~Runner.build` or :meth:`~Runner.test`.
     """
 
-    supported_gpi_interfaces = {"verilog": ["vpi"], "vhdl": ["fli", "vhpi"]}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {
+        "verilog": ["vpi"],
+        "vhdl": ["fli", "vhpi"],
+    }
 
     def _simulator_in_path(self) -> None:
         if shutil.which("vsim") is None:
@@ -1132,7 +1138,7 @@ class Questa(Runner):
         else:
             lib_opts = [
                 "-pli",
-                cocotb_tools.config.lib_name_path("vpi", "questa").as_posix(),
+                cocotb_tools.config.lib_entry("vpi", "questa"),
             ]
 
         cmds.append(
@@ -1187,7 +1193,10 @@ class QuestaQIS(Runner):
          :meth:`~Runner.build` to change them.
     """
 
-    supported_gpi_interfaces = {"verilog": ["vpi"], "vhdl": ["fli", "vhpi"]}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {
+        "verilog": ["vpi"],
+        "vhdl": ["fli", "vhpi"],
+    }
 
     def _simulator_in_path(self) -> None:
         if shutil.which("qrun") is None:
@@ -1332,7 +1341,7 @@ class QuestaQIS(Runner):
         else:
             lib_opts = [
                 "-pli",
-                cocotb_tools.config.lib_name_path("vpi", "questa").as_posix(),
+                cocotb_tools.config.lib_entry("vpi", "questa"),
             ]
 
         cmds.append(
@@ -1386,7 +1395,7 @@ class Ghdl(Runner):
        * Does not support the ``pre_cmd`` argument to :meth:`~Runner.test`.
     """
 
-    supported_gpi_interfaces = {"vhdl": ["vpi"]}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"vhdl": ["vpi"]}
 
     def _set_env_test(self) -> None:
         super()._set_env_test()
@@ -1497,7 +1506,7 @@ class Ghdl(Runner):
             + [f"--work={self.hdl_toplevel_library}"]
             + ghdl_run_args
             + [self.sim_hdl_toplevel]
-            + ["--vpi=" + cocotb_tools.config.lib_name_path("vpi", "ghdl").as_posix()]
+            + ["--vpi=" + cocotb_tools.config.lib_entry("vpi", "ghdl")]
             + self.plusargs
             + self._get_parameter_options(self.parameters)
             + ([f"--wave={self._waves_file()}"] if self.waves or self.gui else [])
@@ -1517,7 +1526,7 @@ class Nvc(Runner):
        * Does not support the ``timescale`` argument to :meth:`~Runner.build` or :meth:`~Runner.test`.
     """
 
-    supported_gpi_interfaces = {"vhdl": ["vhpi"]}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"vhdl": ["vhpi"]}
 
     def __init__(self) -> None:
         super().__init__()
@@ -1604,7 +1613,7 @@ class Nvc(Runner):
             + self._get_parameter_options(self.parameters)
             + ["-r"]
             + self.test_args
-            + ["--load=" + cocotb_tools.config.lib_name_path("vhpi", "nvc").as_posix()]
+            + ["--load=" + cocotb_tools.config.lib_entry("vhpi", "nvc")]
             + self.plusargs
             + ([f"--wave={self._waves_file()}"] if self.waves or self.gui else [])
             + self._get_sim_cmd_suffix(),
@@ -1621,7 +1630,10 @@ class AldecBase(Runner):
        * Does not support the ``timescale`` argument to :meth:`~Runner.build` or :meth:`~Runner.test`.
     """
 
-    supported_gpi_interfaces = {"verilog": ["vpi"], "vhdl": ["vhpi"]}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {
+        "verilog": ["vpi"],
+        "vhdl": ["vhpi"],
+    }
 
     def _simulator_in_path(self) -> None:
         if shutil.which("vsimsa") is None:
@@ -1655,9 +1667,7 @@ class AldecBase(Runner):
             verilog_args_str = " ".join(v for v in verilog_args)
             vhdl_args_str = " ".join(v for v in vhdl_args)
             hdl_library = _as_tcl_value(self.hdl_library)
-            ext_name = _as_tcl_value(
-                cocotb_tools.config.lib_name_path("vpi", "riviera").as_posix()
-            )
+            ext_name = _as_tcl_value(cocotb_tools.config.lib_entry("vpi", "riviera"))
 
             do_script.append(f"alib {hdl_library}")
 
@@ -1696,8 +1706,7 @@ class AldecBase(Runner):
                     f"{self.hdl_toplevel_library}.{self.sim_hdl_toplevel}"
                 ),
                 EXT_NAME=_as_tcl_value(
-                    cocotb_tools.config.lib_name_path("vhpi", "riviera").as_posix()
-                    + ":vhpi_startup_routines_bootstrap"
+                    cocotb_tools.config.lib_entry("vhpi", "riviera")
                 ),
                 EXTRA_ARGS=" ".join(
                     _as_tcl_value(v)
@@ -1709,7 +1718,7 @@ class AldecBase(Runner):
             )
 
             self.env["GPI_EXTRA"] = (
-                cocotb_tools.config.lib_name_path("vpi", "riviera").as_posix()
+                cocotb_tools.config.lib_entry("vpi", "riviera")
                 + ":cocotbvpi_entry_point"
             )
         else:
@@ -1717,9 +1726,7 @@ class AldecBase(Runner):
                 TOPLEVEL=_as_tcl_value(
                     f"{self.hdl_toplevel_library}.{self.sim_hdl_toplevel}"
                 ),
-                EXT_NAME=_as_tcl_value(
-                    cocotb_tools.config.lib_name_path("vpi", "riviera").as_posix()
-                ),
+                EXT_NAME=_as_tcl_value(cocotb_tools.config.lib_entry("vpi", "riviera")),
                 EXTRA_ARGS=" ".join(
                     _as_tcl_value(v)
                     for v in (
@@ -1853,7 +1860,7 @@ class Verilator(Runner):
        * Does not support the ``pre_cmd`` argument to :meth:`~Runner.test`.
     """
 
-    supported_gpi_interfaces = {"verilog": ["vpi"]}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"verilog": ["vpi"]}
 
     def _set_env_test(self) -> None:
         super()._set_env_test()
@@ -1987,7 +1994,10 @@ class Xcelium(Runner):
        * Does not support the ``timescale`` argument to :meth:`~Runner.test`.
     """
 
-    supported_gpi_interfaces = {"verilog": ["vpi"], "vhdl": ["vhpi"]}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {
+        "verilog": ["vpi"],
+        "vhdl": ["vhpi"],
+    }
 
     def _simulator_in_path(self) -> None:
         if shutil.which("xrun") is None:
@@ -2100,10 +2110,10 @@ class Xcelium(Runner):
 
         if self.waves:
             input_tcl = [
-                f'-input "@database -open cocotb_waves -default" '
-                f'-input "@probe -database cocotb_waves -create {xrun_top} -all -depth all" '
-                f'-input "@run" '
-                f'-input "@exit" '
+                '-input "@database -open cocotb_waves -default" ',
+                f'-input "@probe -database cocotb_waves -create {xrun_top} -all -depth all" ',
+                '-input "@run" ',
+                '-input "@exit" ',
             ]
         else:
             input_tcl = ["-input", "@run; exit;"]
@@ -2127,8 +2137,7 @@ class Xcelium(Runner):
                 f"{self.build_dir}/xrun_snapshot",
                 # + ["-vpicompat 1800v2005"]  # <1364v1995|1364v2001|1364v2005|1800v2005> Specify the IEEE VPI
                 "-loadvpisim",
-                cocotb_tools.config.lib_name_path("vpi", "xcelium").as_posix()
-                + ":vlog_startup_routines_bootstrap",
+                cocotb_tools.config.lib_entry("vpi", "xcelium"),
                 "-cds_implicit_tmpdir",
                 tmpdir,
                 "-licqueue",
@@ -2160,7 +2169,7 @@ class Vcs(Runner):
        * Does not support the ``timescale`` argument to :meth:`~Runner.build` or :meth:`~Runner.test`.
     """
 
-    supported_gpi_interfaces = {"verilog": ["vpi"]}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"verilog": ["vpi"]}
 
     def _simulator_in_path(self) -> None:
         if shutil.which("vcs") is None:
@@ -2214,7 +2223,7 @@ class Vcs(Runner):
             cmds = [
                 ["vcs"]
                 + self._build_opts
-                + ["-load", cocotb_tools.config.lib_name_path("vpi", "vcs").as_posix()]
+                + ["-load", cocotb_tools.config.lib_entry("vpi", "vcs")]
                 + [arg.value for arg in self._build_args]
                 + self._get_include_options(self.includes)
                 + self._get_define_options(self.defines)
@@ -2260,7 +2269,7 @@ class Dsim(Runner):
        * Does not support the ``pre_cmd`` argument to :meth:`~Runner.test`.
     """
 
-    supported_gpi_interfaces = {"verilog": ["vpi"]}
+    supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"verilog": ["vpi"]}
 
     def _simulator_in_path(self) -> None:
         if shutil.which("dsim") is None:
@@ -2302,7 +2311,7 @@ class Dsim(Runner):
                 "-work",
                 str(self.build_dir),
                 "-pli_lib",
-                cocotb_tools.config.lib_name_path("vpi", "dsim").as_posix(),
+                cocotb_tools.config.lib_entry("vpi", "dsim"),
                 "+acc+rwcbfsWF",
                 "-image",
                 "image",
@@ -2335,7 +2344,7 @@ class Dsim(Runner):
                     "-work",
                     str(self.build_dir),
                     "-pli_lib",
-                    cocotb_tools.config.lib_name_path("vpi", "dsim").as_posix(),
+                    cocotb_tools.config.lib_entry("vpi", "dsim"),
                     "+acc+rwcbfsWF",
                     "-genimage",
                     "image",

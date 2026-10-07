@@ -156,6 +156,8 @@ Marking and Generating Tests
 
 .. autofunction:: cocotb.xfail
 
+.. autoclass:: cocotb.Param
+
 .. autoclass:: cocotb.regression.TestFactory
     :members:
     :member-order: bysource
@@ -962,27 +964,27 @@ Other Runtime Information
 
     .. versionadded:: 2.1
 
-Future Features
----------------
+Preview Features
+----------------
 
-.. envvar:: COCOTB_FUTURE
+.. envvar:: COCOTB_PREVIEW
 
     Type: :ref:`env-list`
 
-    A comma-separated list of experimental features or breaking changes that can be enabled or disabled.
-    If this variable is not defined, all experimental features and breaking changes are disabled.
+    A comma-separated list of previews of upcoming cocotb behavior that can be enabled.
+    If this variable is not defined, all preview features are disabled.
 
-    See :class:`cocotb.future.Future` for a list of available features.
+    See :class:`cocotb.preview.Feature` for a list of available features.
     The lowercase name of the feature is used to enable it.
     Setting the value to ``1``, ``true``, or ``yes`` enables all features,
     while ``0``, ``false``, or ``no`` disables all features.
 
     .. versionadded:: 2.1
 
-.. automodule:: cocotb.future
+.. automodule:: cocotb.preview
     :members:
     :member-order: bysource
-    :synopsis: Experimental features or breaking changes that can be enabled or disabled.
+    :synopsis: Previews of upcoming cocotb behavior that can be enabled or disabled.
 
 Debugging
 ---------
@@ -1009,8 +1011,29 @@ Debugging
 
     Default: :data:`False`
 
-    If defined, cocotb will drop into the Python debugger (:mod:`pdb`) if a test fails with an exception.
+    If set to a true value, cocotb will drop into the Python debugger (:mod:`pdb`) if a test fails with an exception.
     See also the :ref:`troubleshooting-attaching-debugger-python` subsection of :ref:`troubleshooting-attaching-debugger`.
+
+    .. note::
+        To drop into a debugger at a specific line instead of only on test failure,
+        add a call to the built-in function :func:`breakpoint` to the line where you wish to pause.
+
+        By default this uses :mod:`pdb` for debugging;
+        however, because simulators interfere with ``stdin``,
+        the plain :mod:`!pdb` is often unusable here.
+        The ``remote_pdb`` package is a drop-in replacement that listens on a TCP socket instead.
+        To use it, add :func:`breakpoint` where you want to stop and
+        and point the ``PYTHONBREAKPOINT`` environment variable
+        at ``remote_pdb``:
+
+        .. code-block:: shell
+
+            PYTHONBREAKPOINT=remote_pdb.set_trace
+
+        The listening port is printed to the log; connect to it with :command:`telnet` as described in
+        :ref:`Attaching a Debugger <troubleshooting-attaching-debugger-python>`.
+
+        See :func:`sys.breakpointhook` for more details on Python's built-in debugging functionality and :envvar:`!PYTHONBREAKPOINT`.
 
     .. note::
         Prior to Python 3.14 running the ``(q)uit`` command in the debugger would not exit the simulator process,

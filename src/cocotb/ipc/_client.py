@@ -42,7 +42,6 @@ class IpcClient:
         self._next_cb_id = 0
         self._pending: dict[int, dict[str, Any]] = {}
         self._closed = threading.Event()
-        self._sim_event_callback: CallbackFunc | None = None
         self._start_of_sim_callback: CallbackFunc | None = None
         self._log_func: Callable[..., Any] | None = None
         self._get_logger: Callable[[str], logging.Logger] | None = None
@@ -61,10 +60,6 @@ class IpcClient:
     def wait_until_closed(self) -> None:
         """Block until the simulator closes the connection."""
         self._closed.wait()
-
-    def set_sim_event_callback(self, callback: CallbackFunc) -> None:
-        """Register the callback invoked at end of simulation."""
-        self._sim_event_callback = callback
 
     def set_start_of_sim_callback(self, callback: CallbackFunc) -> None:
         """Register the callback invoked at start of simulation."""
@@ -199,9 +194,6 @@ class IpcClient:
             elif func == "start_of_sim_time":
                 if self._start_of_sim_callback is not None:
                     self._start_of_sim_callback()
-            elif func == "end_of_sim_time":
-                if self._sim_event_callback is not None:
-                    self._sim_event_callback()
             elif func == "finalize":
                 pass
             else:

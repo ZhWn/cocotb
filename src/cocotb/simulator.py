@@ -30,7 +30,7 @@ STRING = 11
 FIXED_STRING = 12
 GENARRAY = 13
 PACKAGE = 14
-PACKED_STRUCTURE = 15
+PACKED = 15
 LOGIC = 16
 LOGIC_ARRAY = 17
 
@@ -348,8 +348,15 @@ def initialize_logger(
     client.request("initialize_logger")
 
 
-def set_sim_event_callback(sim_event_callback: Callable[[], object]) -> None:
-    _get_client().set_sim_event_callback(sim_event_callback)
+def register_end_of_sim_time_callback(
+    func: Callable[..., Any], *args: Any
+) -> sim_callback:
+    client = _get_client()
+    cb_id = client.register_callback(func, args)
+    hdl = client.request("register_end_of_sim_time_callback", cb_id)
+    if hdl is None:
+        raise RuntimeError("Failed to register callback")
+    return sim_callback(hdl, cb_id)
 
 
 def clock_create(hdl: sim_obj) -> cpp_clock:

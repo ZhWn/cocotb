@@ -387,16 +387,10 @@ bool dispatch_request(const IpcValue &msg, IpcValue &result,
         return true;
     }
 
-    if (m == "set_sim_event_callback") {
-        // The Python side keeps track of its own callback; the C side simply
-        // notifies it via the `end_of_sim_time` callback message.
-        result = IpcValue::null();
-        return true;
-    }
-
     if (m == "register_readonly_callback" ||
         m == "register_rwsynch_callback" ||
-        m == "register_nextstep_callback") {
+        m == "register_nextstep_callback" ||
+        m == "register_end_of_sim_time_callback") {
         Args arg(a, error);
         uint64_t cb_id;
         if (!arg.get_uint64(0, cb_id)) {
@@ -408,8 +402,10 @@ bool dispatch_request(const IpcValue &msg, IpcValue &result,
             hdl = gpi_register_readonly_callback(ipc_cb_handler, data);
         } else if (m == "register_rwsynch_callback") {
             hdl = gpi_register_readwrite_callback(ipc_cb_handler, data);
-        } else {
+        } else if (m == "register_nextstep_callback") {
             hdl = gpi_register_nexttime_callback(ipc_cb_handler, data);
+        } else {
+            hdl = gpi_register_end_of_sim_time_callback(ipc_cb_handler, data);
         }
         uint64_t id = add_handle(HandleKind::Callback, hdl);
         result = id ? IpcValue::integer(static_cast<int64_t>(id))

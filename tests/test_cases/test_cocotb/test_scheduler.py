@@ -778,7 +778,7 @@ async def test_cancel_task(_: object) -> None:
 async def test_cancel_task_cancellation_error(_: object) -> None:
     a = Event()
 
-    async def coro():
+    async def coro() -> None:
         with contextlib.suppress(CancelledError):
             await a.wait()
 
@@ -794,7 +794,7 @@ async def test_raise_exception_during_cancellation(_: object) -> None:
         try:
             await Timer(10)
         except CancelledError:
-            raise MyException()
+            raise MyException() from None
 
     t = cocotb.start_soon(raises_in_cleanup())
     await Timer(1)
@@ -1161,23 +1161,6 @@ async def test_957_2(dut: Any) -> None:
 
 
 @cocotb.test
-async def test_task_start_soon(_: object) -> None:
-    """Test functionality of Task.start_soon()."""
-
-    async def coro() -> None:
-        await Timer(2)
-
-    task = Task(coro())
-    task.start_soon()
-    await Timer(1)
-    assert not task.done()
-    with pytest.raises(RuntimeError):
-        task.start_soon()
-    await Timer(2)
-    assert task.done()
-
-
-@cocotb.test
 async def test_start_soon_awaitable(_: object) -> None:
     """Test that cocotb.start_soon() works with any Awaitable, not just coroutines."""
 
@@ -1204,7 +1187,7 @@ async def test_task_closes_coro_when_never_started(_: object) -> None:
     assert inspect.getcoroutinestate(c) == inspect.CORO_CREATED
 
     # Ensure ResourceWarning is raised
-    with pytest.warns(ResourceWarning, match="Task '.*' was never started."):
+    with pytest.warns(ResourceWarning, match="Task '.*' was never started."):  # noqa: PT031
         del task
         gc.collect()
 

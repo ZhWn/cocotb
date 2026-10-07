@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 from __future__ import annotations
 
-import pdb
+import pdb  # noqa: T100
 import sys
 from asyncio import CancelledError
 from collections.abc import Awaitable, Coroutine
@@ -88,7 +88,7 @@ class TestManager:
 
         # start main task
         self._main_task._add_done_callback(self._test_done_callback)
-        self._main_task.start_soon()
+        self._main_task._start_soon()
         self._tasks[self._main_task] = None
 
         # start timeout if specified
@@ -140,8 +140,8 @@ class TestManager:
         if _pdb_on_exception and exc is not None:
             try:
                 pdb.post_mortem(exc.__traceback__)
-            except BaseException:
-                pdb.set_trace()
+            except BaseException:  # noqa: BLE001
+                pdb.set_trace()  # noqa: T100
 
         # Cancel the timeout if it is running.
         if self._timeout_cb is not None:
@@ -253,7 +253,7 @@ def start_soon(
     """
     task = create_task(coro, name=name)
     if task._unstarted():
-        task.start_soon()
+        task._start_soon()
     elif task.done():
         raise RuntimeError("Cannot schedule a Task that has already completed.")
     return task

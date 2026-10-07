@@ -18,9 +18,9 @@ from typing import cast
 import cocotb
 import cocotb._profiling
 import cocotb._shutdown
-import cocotb.future
 import cocotb.handle
 import cocotb.logging
+import cocotb.preview
 import cocotb.simtime
 import cocotb.simulator
 from cocotb_tools import _env
@@ -32,7 +32,7 @@ def init_package_from_simulation() -> None:
     """Initialize the cocotb package from a simulation context."""
 
     # Initialize subsystems
-    cocotb.future._init()
+    cocotb.preview._init()
     cocotb._shutdown._init()
     cocotb.logging._init()
     cocotb._profiling._init()
@@ -176,6 +176,7 @@ def _setup_random_seed() -> None:
         warnings.warn(
             "RANDOM_SEED is deprecated in favor of COCOTB_RANDOM_SEED",
             DeprecationWarning,
+            stacklevel=1,
         )
         seed = _env.get_int("RANDOM_SEED", seed)
 
@@ -184,6 +185,7 @@ def _setup_random_seed() -> None:
             "Passing +ntb_random_seed will not be used to seed Python's random number generator in the future. "
             "Ensure you also set `COCOTB_RANDOM_SEED`.",
             FutureWarning,
+            stacklevel=1,
         )
         seed = int(str(cocotb.plusargs["ntb_random_seed"]))
 
@@ -192,6 +194,7 @@ def _setup_random_seed() -> None:
             "Passing +seed will not be used to seed Python's random number generator in the future. "
             "Ensure you also set `COCOTB_RANDOM_SEED`.",
             FutureWarning,
+            stacklevel=1,
         )
         seed = int(str(cocotb.plusargs["seed"]))
 

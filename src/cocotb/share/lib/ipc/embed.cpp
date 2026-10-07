@@ -151,26 +151,6 @@ static int start_of_sim_time(void *) {
     return result;
 }
 
-static void end_of_sim_time(void *) {
-    IPC_LOG_TRACE("GPI End Sim => [ IPC End ]");
-    DEFER(IPC_LOG_TRACE("[ IPC End ] => GPI End Sim"));
-
-    if (!ipc_transport) {
-        return;
-    }
-
-    IpcValue msg = IpcValue::object();
-    msg.set("type", IpcValue::string("callback"));
-    msg.set("func", IpcValue::string("end_of_sim_time"));
-    msg.set("id", IpcValue::integer(static_cast<int64_t>(next_msg_id++)));
-    if (!cocotb::ipc::send_msg(msg)) {
-        return;
-    }
-
-    int result = 0;
-    wait_for_ack(next_msg_id - 1, &result);
-}
-
 static void finalize(void *) {
     IPC_LOG_TRACE("GPI Finalize => [ IPC Finalize ]");
     DEFER(IPC_LOG_TRACE("[ IPC Finalize ] => GPI Finalize"));
@@ -353,6 +333,5 @@ extern "C" IPC_EXPORT void initialize(void) {
     }
 
     gpi_register_start_of_sim_time_callback(start_of_sim_time, nullptr);
-    gpi_register_end_of_sim_time_callback(end_of_sim_time, nullptr);
     gpi_register_finalize_callback(finalize, nullptr);
 }

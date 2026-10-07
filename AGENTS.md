@@ -5,10 +5,13 @@
 ```
 src/
   cocotb/                    # Main Python testbench framework
+  cocotb/ipc/                # Python half of the IPC transport (client, codecs, shm)
+  cocotb/simulator.py        # Pure-Python implementation of the `cocotb.simulator` API
+  cocotb/share/lib/ipc/      # Simulator-side half of the IPC transport (C++, libcocotbipc)
   cocotb_tools/              # Config, runner, pytest plugin
   cocotb_tools/_pytest/      # pytest plugin implementation
-  pygpi/                     # Python GPI bindings (C++ extension: cocotb.simulator)
-cocotb_build_libs.py         # C++ extension build logic for per-simulator GPI libs
+  pygpi/                     # Entry point loading for the Python testbench process
+CMakeLists.txt               # Build logic for the per-simulator GPI libs and libcocotbipc
 tests/
   pytest/                    # Simulator-agnostic pytest tests
   pytest_plugin/             # Pytest plugin tests (need --cocotb-simulator flags)
@@ -54,8 +57,8 @@ tests/
 
 ## Codebase notes
 
-- `cocotb_build_libs.py` builds per-simulator C++ shared libraries (libcocotbvpi_*, libcocotbvhpi_*) loaded by simulators via VPI/VHPI/FLI
-- `cocotb.simulator` is a C++ extension exposing the GPI to Python
+- `CMakeLists.txt` builds the per-simulator C++ shared libraries (libcocotbvpi_*, libcocotbvhpi_*) loaded by simulators via VPI/VHPI/FLI, plus `libcocotbipc`, the simulator-side half of the IPC transport
+- `cocotb.simulator` is a pure-Python module that forwards the GPI API over IPC to `libcocotbipc`; the Python testbench runs in a separate process started by the simulator
 - `tests/test_cases/` contains legacy Makefile-based tests; new tests should go in `tests/pytest/`
 - Towncrier for release notes: add fragments under `docs/source/newsfragments/`
 - Coverage uses `coverage` with `patch = ["subprocess"]` for subprocess coverage; run `coverage combine` to merge

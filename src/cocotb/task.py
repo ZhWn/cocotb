@@ -239,7 +239,7 @@ class Task(Generic[ResultType]):
             # - finished coroutine
             except IndexError:
                 try:
-                    coro_name = self._coro.__name__
+                    coro_name = self._coro.__name__  # type: ignore[attr-defined]
                 except AttributeError:
                     coro_name = type(self._coro).__name__
         else:
@@ -267,13 +267,11 @@ class Task(Generic[ResultType]):
         else:
             raise RuntimeError("Task in unknown state")
 
-    def start_soon(self) -> None:
+    def _start_soon(self) -> None:
         """Queues an unstarted Task to start running.
 
         Raises:
             RuntimeError: If the Task has already started.
-
-        .. versionadded:: 2.1
         """
         if self._state is not _TaskState.UNSTARTED:
             raise RuntimeError("Can only start_soon() an unstarted Task")
@@ -390,7 +388,7 @@ class Task(Generic[ResultType]):
             self._set_outcome(
                 remove_traceback_frames(e, ["_resume"]), _TaskState.CANCELLED
             )
-        except BaseException as e:
+        except BaseException as e:  # noqa: BLE001
             if self._must_cancel:
                 if debug.debug:
                     self._log.debug(
@@ -444,7 +442,7 @@ class Task(Generic[ResultType]):
                 # TODO Don't allow `_prime()` to call `_react()`?
                 try:
                     self._trigger_callback = trigger._register(self._schedule_resume)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     self._schedule_resume(remove_traceback_frames(e, ["_resume"]))
                 else:
                     if debug.debug:
@@ -696,7 +694,7 @@ class Task(Generic[ResultType]):
 
     def __await__(self) -> Generator[Trigger, None, ResultType]:
         if self._unstarted():
-            self.start_soon()
+            self._start_soon()
         if not self.done():
             yield self.complete
         return self.result()
@@ -711,6 +709,7 @@ class Task(Generic[ResultType]):
                 f"Task {self._name!r} was never started. Did you forget to call start_soon()?",
                 ResourceWarning,
                 source=self,
+                stacklevel=1,
             )
             # But close the coroutine so we don't get another ResourceWarning about an un-awaited coroutine.
             self._coro.close()

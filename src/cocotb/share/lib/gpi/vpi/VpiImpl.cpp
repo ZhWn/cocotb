@@ -87,9 +87,17 @@ gpi_objtype to_gpi_objtype(int32_t vpitype, int num_elements, bool is_vector) {
         case vpiRegBit:
         case vpiMemoryWord:
         case vpiPackedArrayVar:
+        case vpiVarSelect:
+        case vpiBitSelect:
         case vpiPackedArrayNet:
             if (is_vector || num_elements > 1) {
+#ifdef GHDL
+                // GHDL is a VHDL simulator - VHDL doesn't distinguish
+                // packed/unpacked
                 return GPI_LOGIC_ARRAY;
+#else
+                return GPI_PACKED;
+#endif
             } else {
                 return GPI_LOGIC;
             }
@@ -209,6 +217,8 @@ GpiObjHdl *VpiImpl::create_gpi_obj_from_handle(vpiHandle new_hdl,
         case vpiLongIntVar:
         case vpiLongIntNet:
         case vpiPackedArrayVar:
+        case vpiVarSelect:
+        case vpiBitSelect:
         case vpiPackedArrayNet:
         case vpiRealVar:
         case vpiRealNet:
@@ -249,9 +259,12 @@ GpiObjHdl *VpiImpl::create_gpi_obj_from_handle(vpiHandle new_hdl,
 #else
             num_elements = vpi_get(vpiSize, new_hdl);
 #endif
-            new_obj = new VpiSignalObjHdl(
-                this, new_hdl, to_gpi_objtype(type, num_elements, is_vector),
-                false);
+            auto gpi_type = to_gpi_objtype(type, num_elements, is_vector);
+            if ((type == vpiEnumVar || type == vpiEnumNet) &&
+                vpi_get(vpiPacked, new_hdl)) {
+                gpi_type = GPI_PACKED;
+            }
+            new_obj = new VpiSignalObjHdl(this, new_hdl, gpi_type, false);
             break;
         }
         case vpiParameter:
@@ -279,8 +292,7 @@ GpiObjHdl *VpiImpl::create_gpi_obj_from_handle(vpiHandle new_hdl,
             auto is_vector = false;
             if (vpi_get(vpiPacked, new_hdl)) {
                 LOG_DEBUG("VPI: Found packed struct/union data type");
-                new_obj = new VpiSignalObjHdl(this, new_hdl,
-                                              GPI_PACKED_STRUCTURE, false);
+                new_obj = new VpiSignalObjHdl(this, new_hdl, GPI_PACKED, false);
                 break;
             } else if (vpi_get(vpiVector, new_hdl)) {
                 is_vector = true;
@@ -426,7 +438,8 @@ GpiObjHdl *VpiImpl::get_child_by_name(const std::string &name,
         if (iter != NULL) {
             for (auto rgn = vpi_scan(iter); rgn != NULL; rgn = vpi_scan(iter)) {
                 auto rgn_type = vpi_get(vpiType, rgn);
-                if (rgn_type == vpiGenScope || rgn_type == vpiModule) {
+                if (rgn_type == vpiGenScope || rgn_type == vpiModule ||
+                    rgn_type == vpiInterface) {
                     std::string rgn_name = vpi_get_str(vpiName, rgn);
                     if (VpiImpl::compare_generate_labels(rgn_name, name)) {
                         new_hdl = parent_hdl;
@@ -489,8 +502,8 @@ GpiObjHdl *VpiImpl::get_child_by_index(int32_t index, GpiObjHdl *parent) {
         writable.push_back('\0');
 
         new_hdl = vpi_handle_by_name(&writable[0], NULL);
-    } else if (obj_type == GPI_LOGIC || obj_type == GPI_LOGIC_ARRAY ||
-               obj_type == GPI_ARRAY || obj_type == GPI_STRING) {
+    } else if (obj_type == GPI_LOGIC_ARRAY || obj_type == GPI_ARRAY ||
+               obj_type == GPI_STRING || obj_type == GPI_PACKED) {
         new_hdl = vpi_handle_by_index(vpi_hdl, index);
 
         /* vpi_handle_by_index() doesn't work for all simulators when dealing
@@ -505,21 +518,9 @@ GpiObjHdl *VpiImpl::get_child_by_index(int32_t index, GpiObjHdl *parent) {
          * pseudo-handle to behave like the first index.
          */
         if (new_hdl == NULL) {
-            int left = parent->get_range_left();
-            int right = parent->get_range_right();
-            bool ascending = parent->get_range_dir() == GPI_RANGE_UP;
-
             LOG_DEBUG(
                 "Unable to find handle through vpi_handle_by_index(), "
                 "attempting second method");
-
-            if ((ascending && (index < left || index > right)) ||
-                (!ascending && (index > left || index < right))) {
-                LOG_ERROR(
-                    "Invalid Index - Index %d is not in the range of [%d:%d]",
-                    index, left, right);
-                return NULL;
-            }
 
             /* Get the number of constraints to determine if the index will
              * result in a pseudo-handle or should be found */
@@ -564,16 +565,32 @@ GpiObjHdl *VpiImpl::get_child_by_index(int32_t index, GpiObjHdl *parent) {
 
             new_hdl = vpi_handle_by_name(&writable[0], NULL);
 
-            /* Create a pseudo-handle if not the last index into a
-             * multi-dimensional array */
-            if (new_hdl == NULL && constraint_cnt > 1) {
-                new_hdl = p_hdl;
+            if (new_hdl == NULL) {
+                int left = parent->get_range_left();
+                int right = parent->get_range_right();
+                bool ascending = parent->get_range_dir() == GPI_RANGE_UP;
+
+                if ((ascending && (index < left || index > right)) ||
+                    (!ascending && (index > left || index < right))) {
+                    LOG_ERROR(
+                        "Invalid Index - Index %d is not in the range of "
+                        "[%d:%d]",
+                        index, left, right);
+                    return NULL;
+                }
+
+                /* Create a pseudo-handle if not the last index into a
+                 * multi-dimensional array */
+                if (constraint_cnt > 1) {
+                    new_hdl = p_hdl;
+                }
             }
         }
     } else {
         LOG_ERROR(
             "VPI: Parent of type %s must be of type GPI_GENARRAY, "
-            "GPI_LOGIC, GPI_LOGIC, GPI_ARRAY, or GPI_STRING to have an index.",
+            "GPI_LOGIC_ARRAY, GPI_ARRAY, GPI_STRING, or GPI_PACKED "
+            "to have an index.",
             parent->get_type_str());
         return NULL;
     }
@@ -740,10 +757,35 @@ GpiCbHdl *VpiImpl::register_nexttime_callback(int (*cb_func)(void *),
     return cb_hdl;
 }
 
-// If the Python world wants things to shut down then unregister
-// the callback for end of sim
+GpiCbHdl *VpiImpl::register_start_of_sim_time_callback(int (*cb_func)(void *),
+                                                       void *cb_data) {
+    auto cb_hdl = new VpiStartupCbHdl(this);
+    auto err = cb_hdl->arm();
+    // LCOV_EXCL_START
+    if (err) {
+        delete cb_hdl;
+        return NULL;
+    }
+    // LCOV_EXCL_STOP
+    cb_hdl->set_cb_info(cb_func, cb_data);
+    return cb_hdl;
+}
+
+GpiCbHdl *VpiImpl::register_end_of_sim_time_callback(int (*cb_func)(void *),
+                                                     void *cb_data) {
+    auto cb_hdl = new VpiShutdownCbHdl(this);
+    auto err = cb_hdl->arm();
+    // LCOV_EXCL_START
+    if (err) {
+        delete cb_hdl;
+        return NULL;
+    }
+    // LCOV_EXCL_STOP
+    cb_hdl->set_cb_info(cb_func, cb_data);
+    return cb_hdl;
+}
+
 void VpiImpl::sim_end() {
-    m_sim_finish_cb->remove();
 #ifdef ICARUS
     // Must skip checking return value on Icarus because their version of
     // vpi_control() returns void for some reason.
@@ -771,49 +813,7 @@ const char *VpiImpl::get_type_delimiter(GpiObjHdl *obj_hdl) {
     return (obj_hdl->get_type() == GPI_PACKAGE) ? "" : ".";
 }
 
-static int startup_callback(void *) {
-    LOG_TRACE("GPI => [ GPI (VPI startup) ]");
-    gpi_start_of_sim_time();
-    LOG_TRACE("[ GPI (VPI startup) ] => GPI");
-    return 0;
-}
-
-static int shutdown_callback(void *) {
-    LOG_TRACE("GPI => [ GPI (VPI end of sim time) ]");
-    gpi_end_of_sim_time();
-    LOG_TRACE("[ GPI (VPI end of sim time) ] => GPI");
-    return 0;
-}
-
 void VpiImpl::main() noexcept {
-    auto startup_cb = new VpiStartupCbHdl(this);
-    auto err = startup_cb->arm();
-    // LCOV_EXCL_START
-    if (err) {
-        LOG_CRITICAL(
-            "VPI: Unable to register startup callback! Simulation will end.");
-        check_vpi_error();
-        delete startup_cb;
-        exit(1);
-    }
-    // LCOV_EXCL_STOP
-    startup_cb->set_cb_info(startup_callback, nullptr);
-
-    auto shutdown_cb = new VpiShutdownCbHdl(this);
-    err = shutdown_cb->arm();
-    // LCOV_EXCL_START
-    if (err) {
-        LOG_CRITICAL(
-            "VPI: Unable to register shutdown callback! Simulation will end.");
-        check_vpi_error();
-        startup_cb->remove();
-        delete shutdown_cb;
-        exit(1);
-    }
-    // LCOV_EXCL_STOP
-    shutdown_cb->set_cb_info(shutdown_callback, nullptr);
-    m_sim_finish_cb = shutdown_cb;
-
     gpi_register_impl(this);
     gpi_entry_point();
 }
