@@ -289,14 +289,14 @@ extern "C" IPC_EXPORT void initialize(void) {
             return;
         }
 
+#if defined(_WIN32)
+        const int pid = static_cast<int>(_getpid());
+#else
+        const int pid = static_cast<int>(getpid());
+#endif
         IPC_LOG_INFO("Waiting for %lu seconds - attach to PID %d with your "
                      "debugger",
-                     sleep_time,
-#if defined(_WIN32)
-                     static_cast<int>(_getpid()));
-#else
-                     static_cast<int>(getpid()));
-#endif
+                     sleep_time, pid);
 #if defined(_WIN32)
         Sleep(static_cast<DWORD>(sleep_time) * 1000);
 #else
