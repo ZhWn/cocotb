@@ -140,7 +140,7 @@ class TcpTransport : public IpcTransport {
         while (true) {
             if (recv_buf_.size() >= 4) {
                 uint32_t len = 0;
-                for (int i = 0; i < 4; ++i) {
+                for (size_t i = 0; i < 4; ++i) {
                     len |= static_cast<uint32_t>(
                                static_cast<unsigned char>(recv_buf_[i]))
                            << (8 * i);
