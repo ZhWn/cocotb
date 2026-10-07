@@ -126,7 +126,22 @@ class _Sem:
             self._winapi = w
         else:
             libc = ctypes.CDLL(None, use_errno=True)
+            # Declare the full signatures. Without argtypes ctypes converts the
+            # Python int handle to a 32-bit C int, truncating the sem_t* and
+            # crashing (or blocking forever) on 64-bit platforms.
             libc.sem_open.restype = ctypes.c_void_p
+            libc.sem_open.argtypes = [
+                ctypes.c_char_p,
+                ctypes.c_int,
+                ctypes.c_uint,  # mode_t
+                ctypes.c_uint,  # value
+            ]
+            libc.sem_post.restype = ctypes.c_int
+            libc.sem_post.argtypes = [ctypes.c_void_p]
+            libc.sem_wait.restype = ctypes.c_int
+            libc.sem_wait.argtypes = [ctypes.c_void_p]
+            libc.sem_close.restype = ctypes.c_int
+            libc.sem_close.argtypes = [ctypes.c_void_p]
             flags = os.O_RDWR
             if create:
                 flags |= os.O_CREAT | os.O_EXCL
@@ -178,7 +193,12 @@ class _Region:
             self._mmap = mmap.mmap(-1, self._total, tagname=name)
         else:
             libc = ctypes.CDLL(None, use_errno=True)
+            # See _Sem: argtypes are required so ctypes does not truncate the
+            # 64-bit off_t/size arguments.
             libc.shm_open.restype = ctypes.c_int
+            libc.shm_open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint]
+            libc.ftruncate.restype = ctypes.c_int
+            libc.ftruncate.argtypes = [ctypes.c_int, ctypes.c_longlong]  # off_t
             flags = os.O_RDWR
             if create:
                 flags |= os.O_CREAT | os.O_EXCL
