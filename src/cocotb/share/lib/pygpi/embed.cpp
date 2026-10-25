@@ -85,6 +85,80 @@ static void pygpi_init_debug() {
 static int start_of_sim_time(void *);
 static void finalize(void *);
 
+// The published package zip, or empty when this build carries none.
+static std::string embedded_zip_path;
+
+PyMODINIT_FUNC PyInit_simulator(void);
+
+// Inserts the published zip ahead of the first site-packages entry, so an
+// installed cocotb cannot shadow the embedded one while PYTHONPATH still takes
+// precedence over both. The index computation happens in Python because only
+// site knows the platform's site directories.
+static const char *const syspath_inject_snippet =
+    "import os, site, sys\n"
+    "path = cocotb_embed_zip_path\n"
+    "if path not in sys.path:\n"
+    "    index = 0\n"
+    "    try:\n"
+    "        pkgs = set()\n"
+    "        for p in site.getsitepackages():\n"
+    "            pkgs.add(os.path.normcase(os.path.abspath(p)))\n"
+    "        pkgs.add(os.path.normcase(os.path.abspath(\n"
+    "            site.getusersitepackages())))\n"
+    "        index = len(sys.path)\n"
+    "        for i, entry in enumerate(sys.path):\n"
+    "            if entry and os.path.normcase(os.path.abspath(entry)) in pkgs:\n"
+    "                index = i\n"
+    "                break\n"
+    "    except Exception:\n"
+    "        index = 0\n"
+    "    sys.path.insert(index, path)\n";
+
+// Publish the embedded zip and put it on sys.path. A library built without one,
+// or built with COCOTB_EMBED_PYTHON=never, leaves sys.path untouched. A failure
+// here is fatal: a library carrying its own Python layer must not silently run
+// an installed copy instead.
+static int inject_embedded_zip() {
+    const std::string &path = embedded_zip_path;
+    if (path.empty()) {
+        return 0;
+    }
+    PyObject *globals = PyDict_New();
+    PyObject *builtins = globals != NULL ? PyEval_GetBuiltins() : NULL;
+    PyObject *path_obj = PyUnicode_DecodeFSDefault(path.c_str());
+    if (globals == NULL || builtins == NULL || path_obj == NULL ||
+        PyDict_SetItemString(globals, "__builtins__", builtins) != 0 ||
+        PyDict_SetItemString(globals, "cocotb_embed_zip_path", path_obj) != 0) {
+        // LCOV_EXCL_START
+        if (PyErr_Occurred() != NULL) {
+            PyErr_Print();
+        }
+        Py_XDECREF(path_obj);
+        Py_XDECREF(globals);
+        PYGPI_LOG_ERROR("Failed to prepare the cocotb sys.path injection");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+    Py_DECREF(path_obj);
+
+    PyObject *code = Py_CompileString(syspath_inject_snippet,
+                                      "<cocotb sys.path>", Py_file_input);
+    PyObject *result =
+        code != NULL ? PyEval_EvalCode(code, globals, globals) : NULL;
+    Py_XDECREF(code);
+    Py_DECREF(globals);
+    if (result == NULL) {
+        // LCOV_EXCL_START
+        PyErr_Print();
+        PYGPI_LOG_ERROR(
+            "Failed to put the embedded cocotb package zip on sys.path");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+    Py_DECREF(result);
+    return 0;
+}
+
 extern "C" PYGPI_EXPORT int pygpi_initialize(void) {
     pygpi_init_debug();
     pygpi_logging_initialize();
@@ -104,6 +178,28 @@ extern "C" PYGPI_EXPORT int pygpi_initialize(void) {
     // initialization can determine path from executable
 
     static wchar_t interpreter_path[PATH_MAX], sys_executable[PATH_MAX];
+
+    // Publishing needs no interpreter, and the answer decides whether the
+    // simulator module must be registered as a builtin, which only works
+    // before Python is initialized.
+#ifdef COCOTB_HAVE_EMBEDDED_ZIP
+    embedded_zip_path = pygpi_publish_embedded_zip();
+#else
+    embedded_zip_path.clear();
+#endif
+    if (!embedded_zip_path.empty()) {
+        // The packages come from the published zip, and zipimport cannot load
+        // extension modules, so `import cocotb.simulator` must resolve to this
+        // very library. PyImport_AppendInittab is the only hook that runs
+        // early enough.
+        if (PyImport_AppendInittab("cocotb.simulator", PyInit_simulator) != 0) {
+            // LCOV_EXCL_START
+            PYGPI_LOG_ERROR(
+                "Failed to register cocotb.simulator as a builtin module");
+            return -1;
+            // LCOV_EXCL_STOP
+        }
+    }
 
     if (get_interpreter_path(interpreter_path, sizeof(interpreter_path))) {
         // LCOV_EXCL_START
@@ -167,6 +263,12 @@ extern "C" PYGPI_EXPORT int pygpi_initialize(void) {
         PYGPI_LOG_ERROR(
             "Unexpected sys.executable value (expected '%ls', got '%ls')",
             interpreter_path, sys_executable);
+        // LCOV_EXCL_STOP
+    }
+
+    if (inject_embedded_zip() != 0) {
+        // LCOV_EXCL_START
+        return -1;
         // LCOV_EXCL_STOP
     }
 

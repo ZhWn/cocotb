@@ -129,6 +129,12 @@ def build_cocotb_for_dev_test(session: nox.Session) -> None:
     env["CFLAGS"] = flags
     env["CXXFLAGS"] = flags
     env["LDFLAGS"] = "--coverage"
+    # Coverage is collected from the packages in the source tree, and
+    # --doctest-modules runs against them; an embedded copy would shadow both.
+    # Append rather than assign so caller-supplied flags survive.
+    env["CMAKE_ARGS"] = (
+        env.get("CMAKE_ARGS", "") + " -DCOCOTB_EMBED_PYTHON=OFF"
+    ).strip()
 
     # Editable installs break C/C++ coverage collection; don't use them.
     # C/C++ coverage collection requires that the object files produced by the

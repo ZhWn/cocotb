@@ -162,6 +162,196 @@ set_target_properties(simulator PROPERTIES
     SUFFIX ${PYTHON_EXT_SUFFIX}
 )
 
+# Embed the Python packages of src/ into the PyGPI library, so a built tree (and
+# a wheel) runs simulations without a pip-installed cocotb. Editable installs
+# default to off: their libraries are loaded from the source tree, where the
+# interpreter already finds the packages.
+option(COCOTB_EMBED_PYTHON "Embed the cocotb Python packages into the PyGPI library" ON)
+if(SKBUILD_STATE STREQUAL "editable")
+    set_property(CACHE COCOTB_EMBED_PYTHON PROPERTY VALUE OFF)
+endif()
+
+if(COCOTB_EMBED_PYTHON)
+    set(COCOTB_EMBED_ZIP "${CMAKE_CURRENT_BINARY_DIR}/cocotb-embed.zip")
+    file(GLOB_RECURSE COCOTB_EMBED_ZIP_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.pyi"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*/py.typed"
+    )
+    list(FILTER COCOTB_EMBED_ZIP_SOURCES EXCLUDE REGEX "/__pycache__/")
+
+    # Version recorded in the embedded package metadata. Wheel builds take it
+    # from scikit-build-core; plain CMake builds reproduce the same string from
+    # the checkout, so cocotb.__version__ is not "0.0.0+unknown" there either.
+    set(COCOTB_VERSION "" CACHE STRING
+        "Version recorded in the embedded Python package metadata (default: build backend version, else git-derived, else the VERSION file)")
+    set(COCOTB_EMBED_ZIP_VERSION "")
+    if(SKBUILD_PROJECT_VERSION_FULL)
+        set(COCOTB_EMBED_ZIP_VERSION "${SKBUILD_PROJECT_VERSION_FULL}")
+    elseif(SKBUILD_PROJECT_VERSION)
+        set(COCOTB_EMBED_ZIP_VERSION "${SKBUILD_PROJECT_VERSION}")
+    elseif(NOT "$ENV{SKBUILD_PROJECT_VERSION_FULL}" STREQUAL "")
+        set(COCOTB_EMBED_ZIP_VERSION "$ENV{SKBUILD_PROJECT_VERSION_FULL}")
+    elseif(NOT "$ENV{SKBUILD_PROJECT_VERSION}" STREQUAL "")
+        set(COCOTB_EMBED_ZIP_VERSION "$ENV{SKBUILD_PROJECT_VERSION}")
+    elseif(NOT COCOTB_VERSION STREQUAL "")
+        set(COCOTB_EMBED_ZIP_VERSION "${COCOTB_VERSION}")
+    else()
+        # Mirrors [tool.setuptools-git-versioning] in pyproject.toml:
+        # {VERSION}.dev{commits since VERSION changed}+r{sha}[.dirty]
+        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" COCOTB_EMBED_ZIP_VERSION)
+        string(STRIP "${COCOTB_EMBED_ZIP_VERSION}" COCOTB_EMBED_ZIP_VERSION)
+        find_package(Git QUIET)
+        if(Git_FOUND)
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" log -1 --format=%H -- VERSION
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                OUTPUT_VARIABLE _version_commit
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE _git_rc
+                ERROR_QUIET
+            )
+            if(_git_rc EQUAL 0 AND NOT _version_commit STREQUAL "")
+                execute_process(
+                    COMMAND "${GIT_EXECUTABLE}" rev-list --count "${_version_commit}..HEAD"
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    OUTPUT_VARIABLE _commit_count
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE _git_rc
+                    ERROR_QUIET
+                )
+                execute_process(
+                    COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    OUTPUT_VARIABLE _head_sha
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE _git_rc
+                    ERROR_QUIET
+                )
+                execute_process(
+                    COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=no
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    OUTPUT_VARIABLE _dirty
+                    RESULT_VARIABLE _git_rc
+                    ERROR_QUIET
+                )
+                if(_git_rc EQUAL 0 AND _commit_count MATCHES "^[0-9]+$" AND NOT _head_sha STREQUAL "")
+                    string(APPEND COCOTB_EMBED_ZIP_VERSION ".dev${_commit_count}+r${_head_sha}")
+                    if(NOT _dirty STREQUAL "")
+                        string(APPEND COCOTB_EMBED_ZIP_VERSION ".dirty")
+                    endif()
+                endif()
+            endif()
+        endif()
+    endif()
+    if(COCOTB_EMBED_ZIP_VERSION STREQUAL "")
+        set(COCOTB_EMBED_ZIP_VERSION_ARGS "")
+    else()
+        message(STATUS "Embedded Python package version: ${COCOTB_EMBED_ZIP_VERSION}")
+        set(COCOTB_EMBED_ZIP_VERSION_ARGS --version "${COCOTB_EMBED_ZIP_VERSION}")
+    endif()
+
+    # The zip content depends on the version string and on the exact set of
+    # source files, neither of which is a file the custom command can depend
+    # on: an up-to-date OUTPUT is not rebuilt just because its command changed,
+    # so a reused build directory would keep shipping the old metadata and
+    # files. Record both in a stamp that only changes when they do.
+    set(COCOTB_EMBED_ZIP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/cocotb-embed.stamp")
+    set(_embed_zip_stamp "${COCOTB_EMBED_ZIP_VERSION}\n")
+    foreach(_embed_zip_source IN LISTS COCOTB_EMBED_ZIP_SOURCES)
+        string(APPEND _embed_zip_stamp "${_embed_zip_source}\n")
+    endforeach()
+    if(EXISTS "${COCOTB_EMBED_ZIP_STAMP}")
+        file(READ "${COCOTB_EMBED_ZIP_STAMP}" _embed_zip_stamp_old)
+    else()
+        set(_embed_zip_stamp_old "")
+    endif()
+    if(NOT _embed_zip_stamp_old STREQUAL _embed_zip_stamp)
+        file(WRITE "${COCOTB_EMBED_ZIP_STAMP}" "${_embed_zip_stamp}")
+    endif()
+
+    add_custom_command(
+        OUTPUT "${COCOTB_EMBED_ZIP}"
+        COMMAND ${Python_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/make_embed_zip.py"
+                --src-dir "${CMAKE_CURRENT_SOURCE_DIR}/src"
+                --output "${COCOTB_EMBED_ZIP}"
+                ${COCOTB_EMBED_ZIP_VERSION_ARGS}
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/make_embed_zip.py"
+            "${COCOTB_EMBED_ZIP_STAMP}"
+            ${COCOTB_EMBED_ZIP_SOURCES}
+        COMMENT "Generating cocotb-embed.zip"
+        VERBATIM
+    )
+    add_custom_target(cocotb_embed_zip DEPENDS "${COCOTB_EMBED_ZIP}")
+
+    target_sources(simulator PRIVATE ${SHARE_LIB_DIR}/pygpi/embed_zip.cpp)
+    target_compile_definitions(simulator PRIVATE COCOTB_HAVE_EMBEDDED_ZIP)
+    add_dependencies(simulator cocotb_embed_zip)
+
+    if(WIN32)
+        # A resource is the portable way to carry the bytes on Windows: the
+        # library is a PE image, so there is no assembler include available.
+        enable_language(RC)
+        # Forward slashes: rc.exe accepts them, and backslashes would need
+        # escaping inside the quoted filename.
+        set(COCOTB_EMBED_ZIP_RC "${CMAKE_CURRENT_BINARY_DIR}/cocotb_embed_zip.rc")
+        set(_embed_zip_rc_body "IDR_COCOTBEMBEDZIP RCDATA \"${COCOTB_EMBED_ZIP}\"\n")
+        if(EXISTS "${COCOTB_EMBED_ZIP_RC}")
+            file(READ "${COCOTB_EMBED_ZIP_RC}" _embed_zip_rc_old)
+        else()
+            set(_embed_zip_rc_old "")
+        endif()
+        if(NOT _embed_zip_rc_old STREQUAL _embed_zip_rc_body)
+            file(WRITE "${COCOTB_EMBED_ZIP_RC}" "${_embed_zip_rc_body}")
+        endif()
+        target_sources(simulator PRIVATE "${COCOTB_EMBED_ZIP_RC}")
+    else()
+        enable_language(ASM)
+        if(APPLE)
+            set(_embed_zip_sym "_")
+            set(_embed_zip_section ".section __TEXT,__const")
+        else()
+            set(_embed_zip_sym "")
+            set(_embed_zip_section ".section .rodata")
+        endif()
+        set(COCOTB_EMBED_ZIP_ASM "${CMAKE_CURRENT_BINARY_DIR}/cocotb_embed_zip.s")
+        set(_embed_zip_asm_body
+            "/* Generated by CMake: the cocotb package zip embedded in this library. */\n")
+        string(APPEND _embed_zip_asm_body "${_embed_zip_section}\n")
+        string(APPEND _embed_zip_asm_body ".globl ${_embed_zip_sym}cocotb_zip_start\n")
+        string(APPEND _embed_zip_asm_body ".globl ${_embed_zip_sym}cocotb_zip_end\n")
+        string(APPEND _embed_zip_asm_body "${_embed_zip_sym}cocotb_zip_start:\n")
+        string(APPEND _embed_zip_asm_body ".incbin \"${COCOTB_EMBED_ZIP}\"\n")
+        string(APPEND _embed_zip_asm_body "${_embed_zip_sym}cocotb_zip_end:\n")
+        if(NOT APPLE)
+            string(APPEND _embed_zip_asm_body
+                ".section .note.GNU-stack,\"\",@progbits\n")
+        endif()
+        if(EXISTS "${COCOTB_EMBED_ZIP_ASM}")
+            file(READ "${COCOTB_EMBED_ZIP_ASM}" _embed_zip_asm_old)
+        else()
+            set(_embed_zip_asm_old "")
+        endif()
+        if(NOT _embed_zip_asm_old STREQUAL _embed_zip_asm_body)
+            file(WRITE "${COCOTB_EMBED_ZIP_ASM}" "${_embed_zip_asm_body}")
+        endif()
+        # The .s content only names the zip, so refresh its timestamp when the
+        # zip changes to force a re-assemble.
+        add_custom_command(
+            OUTPUT "${COCOTB_EMBED_ZIP_ASM}"
+            COMMAND ${CMAKE_COMMAND} -E touch "${COCOTB_EMBED_ZIP_ASM}"
+            DEPENDS "${COCOTB_EMBED_ZIP}"
+            COMMENT "Refreshing cocotb_embed_zip.s for the embedded zip"
+            VERBATIM
+        )
+        target_sources(simulator PRIVATE "${COCOTB_EMBED_ZIP_ASM}")
+    endif()
+else()
+    message(STATUS "Embedding the cocotb Python packages: OFF")
+endif()
+
 function(add_vpi_library SIM_NAME SIM_DEFINE)
     set(options "")
     set(oneValueArgs "")

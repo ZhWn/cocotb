@@ -8,6 +8,8 @@
 #include <Python.h>
 #include <gpi.h>
 
+#include <string>
+
 #ifdef PYGPI_EXPORTS
 #define PYGPI_EXPORT COCOTB_EXPORT
 #else
@@ -17,6 +19,12 @@
 void pygpi_logging_initialize();
 void pygpi_logging_configure(PyObject *handler, PyObject *get_logger);
 void pygpi_logging_set_level(enum gpi_log_level level);
+
+// Materializes the package zip embedded in this library as a file the
+// interpreter can put on sys.path (see tools/make_embed_zip.py). Returns the
+// path, or an empty string when this build carries no embedded packages, the
+// COCOTB_EMBED_PYTHON environment variable says "never", or publication fails.
+std::string pygpi_publish_embedded_zip();
 
 extern int pygpi_debug_enabled;
 extern int python_context_tracing_enabled;
