@@ -49,7 +49,7 @@ COMPILE_ARGS += -debug_access+all
 # Load GPI and VPI for system function registration, without starting PyGPI.
 $(SIM_BUILD)/simv: $(VERILOG_SOURCES) $(CUSTOM_COMPILE_DEPS) | $(SIM_BUILD)
 	cd $(SIM_BUILD) && \
-	COCOTB_BOOTSTRAP="$(shell $(PYTHON_BIN) -m cocotb_tools.config --gpi-entry-point)" \
+	COCOTB_BOOTSTRAP="$(shell $(PYTHON_BIN) -m cocotb_tools.config --gpi-entry-point $(SIM_LOWERCASE))" \
 	GPI_IMPL="$(shell $(PYTHON_BIN) -m cocotb_tools.config --gpi-impl vcs vpi)" \
 	COCOTB_TOPLEVEL=$(call deprecate,TOPLEVEL,COCOTB_TOPLEVEL) \
 	$(CMD) -top $(COCOTB_TOPLEVEL) $(call deprecate,PLUSARGS,COCOTB_PLUSARGS) -sverilog \

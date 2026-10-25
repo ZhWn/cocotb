@@ -53,7 +53,13 @@ endif
 COMPILE_ARGS += --timescale $(COCOTB_HDL_TIMEUNIT)/$(COCOTB_HDL_TIMEPRECISION)
 
 _COCOTB_LIB_DIR = $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-dir)
-COMPILE_ARGS += --vpi --public-flat-rw --prefix Vtop -o Vtop -LDFLAGS "-Wl,-rpath,$(_COCOTB_LIB_DIR) -L$(_COCOTB_LIB_DIR) -lcocotb_bootstrap -rdynamic"
+# The model links the family library, which exports cocotb_bootstrap_entry. On
+# Linux the executable's own symbols stay out of its dynamic symbol table
+# unless it is linked with -rdynamic, and the ABI dispatch tables find the
+# simulator's VPI entry points with dlsym(RTLD_DEFAULT) at load time; macOS
+# exports them by default.
+_COCOTB_RDYNAMIC = $(if $(filter Linux,$(shell uname -s 2>/dev/null)),-rdynamic,)
+COMPILE_ARGS += --vpi --public-flat-rw --prefix Vtop -o Vtop -LDFLAGS "-Wl,-rpath,$(_COCOTB_LIB_DIR) -L$(_COCOTB_LIB_DIR) -lcocotb_verilator $(_COCOTB_RDYNAMIC)"
 
 ifdef VERILOG_INCLUDE_DIRS
   COMPILE_ARGS += $(addprefix +incdir+, $(VERILOG_INCLUDE_DIRS))

@@ -122,8 +122,8 @@ ifeq ($(OS),Msys)
 else
     SEP_ := :
 endif
-GPI_ENTRY_ := $(shell $(PYTHON_BIN) -m cocotb_tools.config --gpi-entry-point)
-PYGPI_ENTRY_ := $(shell $(PYTHON_BIN) -m cocotb_tools.config --pygpi-entry-point)
+GPI_ENTRY_ := $(shell $(PYTHON_BIN) -m cocotb_tools.config --gpi-entry-point $(or $(SIM_LOWERCASE),icarus))
+PYGPI_ENTRY_ := $(shell $(PYTHON_BIN) -m cocotb_tools.config --pygpi-entry-point $(or $(SIM_LOWERCASE),icarus))
 COCOTB_BOOTSTRAP := $(GPI_ENTRY_)$(SEP_)$(LIBPYTHON_LOC)$(SEP_)$(PYGPI_ENTRY_)
 endif
 export COCOTB_BOOTSTRAP

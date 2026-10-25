@@ -5,26 +5,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 from __future__ import annotations
 
-import ctypes
-import os
 from logging import Logger, getLogger
 from pathlib import Path
 from types import SimpleNamespace
-
-# For loading cocotb while not in a simulator, we need to preload libgpi (POSIX), or
-# use os.add_dll_directory (Windows), so the GPI library is available before we import
-# the simulator module.
-#
-# A package imported from an embedded zip (see tools/make_embed_zip.py) has no
-# `libs` directory, and needs none: inside a simulation libgpi is already loaded
-# from the COCOTB_BOOTSTRAP entries, and the simulator module comes from the same
-# library that published the zip.
-_libs_dir = Path(__file__).resolve().parent / "libs"
-if _libs_dir.is_dir():
-    if os.name == "nt":
-        os.add_dll_directory(_libs_dir)  # type: ignore[attr-defined]
-    else:
-        ctypes.CDLL(str(_libs_dir / "libgpi.so"), mode=ctypes.RTLD_GLOBAL)
 
 from cocotb._decorators import Param, parametrize, skipif, test, xfail  # noqa: E402
 from cocotb._test_manager import (  # noqa: E402

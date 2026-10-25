@@ -213,6 +213,10 @@ def _determine_file_type(
 class Runner(ABC):
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {}
 
+    #: Name this simulator is known by in :mod:`cocotb_tools.config`, which
+    #: maps it to the one library serving the whole simulator family.
+    simulator_name: ClassVar[str]
+
     def __init__(self) -> None:
         self._simulator_in_path()
 
@@ -279,7 +283,9 @@ class Runner(ABC):
         bootstrap_entries: list[str] = []
 
         if "COCOTB_BOOTSTRAP" not in self.env:
-            bootstrap_entries.append(cocotb_tools.config.gpi_entry_point())
+            bootstrap_entries.append(
+                cocotb_tools.config.gpi_entry_point(self.simulator_name)
+            )
 
             # Ensure libpython is loaded before the PyGPI entry point.
             if (libpython_loc := self.env.get("LIBPYTHON_LOC")) is not None:
@@ -302,7 +308,9 @@ class Runner(ABC):
         self.env["PYTHONPATH"] = os.pathsep.join(sys.path)
         self.env["PYGPI_PYTHON_BIN"] = sys.executable
         if "COCOTB_BOOTSTRAP" not in self.env:
-            bootstrap_entries.append(cocotb_tools.config.pygpi_entry_point())
+            bootstrap_entries.append(
+                cocotb_tools.config.pygpi_entry_point(self.simulator_name)
+            )
             self.env["COCOTB_BOOTSTRAP"] = os.pathsep.join(bootstrap_entries)
 
     def _set_env_build(self) -> None:
@@ -917,6 +925,7 @@ class Icarus(Runner):
        * Does not support the ``pre_cmd`` argument to :meth:`~Runner.test`.
     """
 
+    simulator_name: ClassVar[str] = "icarus"
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"verilog": ["vpi"]}
 
     def _simulator_in_path(self) -> None:
@@ -1069,6 +1078,7 @@ class Questa(Runner):
        * Does not support the ``timescale`` argument to :meth:`~Runner.build` or :meth:`~Runner.test`.
     """
 
+    simulator_name: ClassVar[str] = "questa"
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {
         "verilog": ["vpi"],
         "vhdl": ["fli", "vhpi"],
@@ -1220,6 +1230,7 @@ class QuestaQIS(Runner):
          :meth:`~Runner.build` to change them.
     """
 
+    simulator_name: ClassVar[str] = "questa"
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {
         "verilog": ["vpi"],
         "vhdl": ["fli", "vhpi"],
@@ -1415,6 +1426,7 @@ class Ghdl(Runner):
        * Does not support the ``pre_cmd`` argument to :meth:`~Runner.test`.
     """
 
+    simulator_name: ClassVar[str] = "ghdl"
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"vhdl": ["vpi"]}
 
     def _set_env_test(self) -> None:
@@ -1548,6 +1560,7 @@ class Nvc(Runner):
        * Verilog sources must end in ``.v`` or ``.sv``, even when tagged with :class:`Verilog`.
     """
 
+    simulator_name: ClassVar[str] = "nvc"
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"vhdl": ["vhpi"]}
 
     def __init__(self) -> None:
@@ -1659,6 +1672,7 @@ class AldecBase(Runner):
        * Does not support the ``timescale`` argument to :meth:`~Runner.build` or :meth:`~Runner.test`.
     """
 
+    simulator_name: ClassVar[str] = "riviera"
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {
         "verilog": ["vpi"],
         "vhdl": ["vhpi"],
@@ -1671,7 +1685,9 @@ class AldecBase(Runner):
     def _set_env_build(self) -> None:
         super()._set_env_build()
         # Load the VPI implementation so it can register system functions.
-        self.env["COCOTB_BOOTSTRAP"] = cocotb_tools.config.gpi_entry_point()
+        self.env["COCOTB_BOOTSTRAP"] = cocotb_tools.config.gpi_entry_point(
+            self.simulator_name
+        )
         self.env["GPI_IMPL"] = cocotb_tools.config.gpi_impl("riviera", "vpi")
 
     def _get_include_options(self, includes: Sequence[PathLike]) -> _Command:
@@ -1878,6 +1894,8 @@ class ActiveHDL(AldecBase):
        * Does not support the ``timescale`` argument to :meth:`~Runner.build` or :meth:`~Runner.test`.
     """
 
+    simulator_name: ClassVar[str] = "activehdl"
+
     def _append_pre_cmd(self, do_script: str) -> str:
         if self.pre_cmd is not None:
             raise RuntimeError("pre_cmd is not implemented for Aldec ActiveHDL.")
@@ -1893,6 +1911,7 @@ class Verilator(Runner):
        * Does not support the ``pre_cmd`` argument to :meth:`~Runner.test`.
     """
 
+    simulator_name: ClassVar[str] = "verilator"
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"verilog": ["vpi"]}
 
     def _set_env_test(self) -> None:
@@ -1972,7 +1991,16 @@ class Verilator(Runner):
                 "-o",
                 self.hdl_toplevel,
                 "-LDFLAGS",
-                f"-Wl,-rpath,{cocotb_tools.config.libs_dir} -L{cocotb_tools.config.libs_dir} -lcocotb_bootstrap -rdynamic",
+                # The model links the family library, which exports
+                # cocotb_bootstrap_entry. On Linux the executable's own symbols
+                # stay out of its dynamic symbol table unless it is linked with
+                # -rdynamic, and the ABI dispatch tables find the simulator's
+                # VPI entry points with dlsym(RTLD_DEFAULT) at load time; macOS
+                # exports them by default.
+                f"-Wl,-rpath,{cocotb_tools.config.libs_dir} "
+                f"-L{cocotb_tools.config.libs_dir} "
+                f"-lcocotb_{cocotb_tools.config.simulator_family(self.simulator_name)}"
+                + (" -rdynamic" if sys.platform.startswith("linux") else ""),
             ]
             + (["--trace"] if self.waves else [])
             + [arg.value for arg in self._build_args]
@@ -2028,6 +2056,7 @@ class Xcelium(Runner):
        * Does not support the ``timescale`` argument to :meth:`~Runner.test`.
     """
 
+    simulator_name: ClassVar[str] = "xcelium"
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {
         "verilog": ["vpi"],
         "vhdl": ["vhpi"],
@@ -2200,6 +2229,7 @@ class Vcs(Runner):
        * Does not support the ``timescale`` argument to :meth:`~Runner.build` or :meth:`~Runner.test`.
     """
 
+    simulator_name: ClassVar[str] = "vcs"
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"verilog": ["vpi"]}
 
     def _simulator_in_path(self) -> None:
@@ -2209,7 +2239,9 @@ class Vcs(Runner):
     def _set_env_build(self) -> None:
         super()._set_env_build()
         # Load the VPI implementation so it can register system functions.
-        self.env["COCOTB_BOOTSTRAP"] = cocotb_tools.config.gpi_entry_point()
+        self.env["COCOTB_BOOTSTRAP"] = cocotb_tools.config.gpi_entry_point(
+            self.simulator_name
+        )
         self.env["GPI_IMPL"] = cocotb_tools.config.gpi_impl("vcs", "vpi")
 
     def _set_env_test(self) -> None:
@@ -2310,6 +2342,7 @@ class Dsim(Runner):
        * Does not support the ``pre_cmd`` argument to :meth:`~Runner.test`.
     """
 
+    simulator_name: ClassVar[str] = "dsim"
     supported_gpi_interfaces: ClassVar[dict[str, list[str]]] = {"verilog": ["vpi"]}
 
     def _simulator_in_path(self) -> None:

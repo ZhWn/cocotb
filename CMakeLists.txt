@@ -29,12 +29,6 @@ set(CMAKE_SKIP_RPATH TRUE)
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 
 if(WIN32)
-    set(PYTHON_EXT_SUFFIX ".${Python_SOABI}.pyd")
-else()
-    set(PYTHON_EXT_SUFFIX ".${Python_SOABI}.so")
-endif()
-
-if(WIN32)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
@@ -54,9 +48,11 @@ else()
         list(APPEND EXTRA_CXX_FLAGS "-flto")
     endif()
 
-    if(WIN32)
-        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-all-symbols")
-    else()
+    # WIN32 intentionally gets no extra linker flags: the family libraries must
+    # export the bootstrap entry points, the COCOTB_EXPORT-marked interface
+    # layers and the startup routine arrays the simulator looks up by name, so
+    # -Wl,--exclude-all-symbols would break them.
+    if(NOT WIN32)
         set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -flto")
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -static-libstdc++")
@@ -73,7 +69,6 @@ set(INCLUDE_DIRS
 )
 
 set(SHARE_LIB_DIR ${CMAKE_SOURCE_DIR}/src/cocotb/share/lib)
-set(COCOTB_DEF_DIR ${CMAKE_SOURCE_DIR}/src/cocotb/share/def)
 
 function(add_cocotb_library TARGET_NAME)
     set(options "")
@@ -106,6 +101,26 @@ function(add_cocotb_library TARGET_NAME)
         target_link_libraries(${TARGET_NAME} PRIVATE ${ARG_LIBRARIES})
     endif()
 
+    if(MSVC)
+        # pyconfig.h nominates the interpreter's import library for the link
+        # with `#pragma comment(lib, ...)`, which resolves to pythonXY.lib
+        # (pythonXYt.lib in a free-threaded build, the versioned _d.lib name
+        # when _DEBUG). Cancel those implicit default libraries: cocotb
+        # resolves every Python C API symbol at runtime and never links
+        # libpython, so a symbol referenced statically must fail as an
+        # unresolved external instead of being satisfied by libpython
+        # silently. This is the Windows counterpart of the
+        # -Wl,--no-undefined gate the Unix builds use.
+        target_link_options(${TARGET_NAME} PRIVATE
+            "/NODEFAULTLIB:python3.lib"
+            "/NODEFAULTLIB:python3t.lib"
+            "/NODEFAULTLIB:python${Python_VERSION_MAJOR}${Python_VERSION_MINOR}.lib"
+            "/NODEFAULTLIB:python${Python_VERSION_MAJOR}${Python_VERSION_MINOR}t.lib"
+            "/NODEFAULTLIB:python${Python_VERSION_MAJOR}${Python_VERSION_MINOR}_d.lib"
+            "/NODEFAULTLIB:python${Python_VERSION_MAJOR}${Python_VERSION_MINOR}t_d.lib"
+        )
+    endif()
+
     if(WIN32)
         target_compile_definitions(${TARGET_NAME} PRIVATE WIN32)
     endif()
@@ -114,59 +129,66 @@ endfunction()
 set(GPI_LINK_LIBS "")
 if(UNIX)
     list(APPEND GPI_LINK_LIBS dl)
+elseif(WIN32)
+    # utils_lookup_global_sym() enumerates the process modules with psapi.
+    list(APPEND GPI_LINK_LIBS psapi)
 endif()
 
-add_cocotb_library(cocotb_bootstrap
-    SOURCES
-        ${SHARE_LIB_DIR}/gpi/dynload.cpp
-        ${SHARE_LIB_DIR}/gpi/bootstrapper.cpp
-    LIBRARIES ${GPI_LINK_LIBS}
+# Everything every simulator family library carries: the bootstrap entry point
+# (and the vlog/vhpi startup routine arrays simulators look up by name), the GPI
+# core, and PyGPI. The same file is loaded twice in a simulator process - once
+# as the VPI/VHPI/FLI object and once as the COCOTB_BOOTSTRAP entry that starts
+# Python - which is why the layers cannot be separate libraries anymore.
+set(COCOTB_FAMILY_SOURCES
+    ${SHARE_LIB_DIR}/gpi/bootstrapper.cpp
+    ${SHARE_LIB_DIR}/gpi/dynload.cpp
+    ${SHARE_LIB_DIR}/gpi/GpiCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/GpiCommon.cpp
+    ${SHARE_LIB_DIR}/gpi/logging.cpp
+    ${SHARE_LIB_DIR}/pygpi/bind.cpp
+    ${SHARE_LIB_DIR}/pygpi/embed.cpp
+    ${SHARE_LIB_DIR}/pygpi/logging.cpp
+    ${SHARE_LIB_DIR}/pygpi/pyapi.cpp
 )
 
-add_cocotb_library(gpi
-    SOURCES
-        ${SHARE_LIB_DIR}/gpi/GpiCbHdl.cpp
-        ${SHARE_LIB_DIR}/gpi/GpiCommon.cpp
-        ${SHARE_LIB_DIR}/gpi/dynload.cpp
-        ${SHARE_LIB_DIR}/gpi/logging.cpp
-    DEFINES GPI_EXPORTS
-    LIBRARIES ${GPI_LINK_LIBS}
+# The per-interface layers. Each starts with its dispatch unit, which is what
+# lets a library call the simulator's own VPI/VHPI/FLI entry points without
+# linking against them: the table is filled from the process with
+# dlsym(RTLD_DEFAULT) (POSIX) or EnumProcessModules (Windows) at load time.
+set(COCOTB_VPI_SOURCES
+    ${SHARE_LIB_DIR}/gpi/abi/vpi_dispatch.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiImpl.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiObj.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiIterator.cpp
+    ${SHARE_LIB_DIR}/gpi/vpi/VpiSignal.cpp
 )
 
-add_cocotb_library(simulator
-    SOURCES
-        ${SHARE_LIB_DIR}/pygpi/bind.cpp
-        ${SHARE_LIB_DIR}/pygpi/embed.cpp
-        ${SHARE_LIB_DIR}/pygpi/logging.cpp
-    DEFINES PYGPI_EXPORTS
-    LIBRARIES gpi
-)
-# Python::Module links the import library on Windows and leaves Python
-# symbols unresolved on Unix (libpython is preloaded at runtime).
-target_link_libraries(simulator PRIVATE Python::Module)
-
-if(SKBUILD_STATE STREQUAL "editable")
-    set_target_properties(simulator PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/src/cocotb
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/src/cocotb
-    )
-else()
-    set_target_properties(simulator PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cocotb
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cocotb
-    )
-endif()
-
-set_target_properties(simulator PROPERTIES
-    PREFIX ""
-    SUFFIX ${PYTHON_EXT_SUFFIX}
+set(COCOTB_VHPI_SOURCES
+    ${SHARE_LIB_DIR}/gpi/abi/vhpi_dispatch.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiImpl.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiObj.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiIterator.cpp
+    ${SHARE_LIB_DIR}/gpi/vhpi/VhpiSignal.cpp
 )
 
-# Embed the Python packages of src/ into the PyGPI library, so a built tree (and
-# a wheel) runs simulations without a pip-installed cocotb. Editable installs
-# default to off: their libraries are loaded from the source tree, where the
-# interpreter already finds the packages.
-option(COCOTB_EMBED_PYTHON "Embed the cocotb Python packages into the PyGPI library" ON)
+set(COCOTB_FLI_SOURCES
+    ${SHARE_LIB_DIR}/gpi/abi/fli_dispatch.cpp
+    ${SHARE_LIB_DIR}/gpi/fli/FliImpl.cpp
+    ${SHARE_LIB_DIR}/gpi/fli/FliCbHdl.cpp
+    ${SHARE_LIB_DIR}/gpi/fli/FliObjHdl.cpp
+)
+
+# Filled in by the embedding block below.
+set(COCOTB_FAMILY_DEFINES "")
+set(COCOTB_FAMILY_EXTRA_SOURCES "")
+
+# Embed the Python packages of src/ into every family library, so a built tree
+# (and a wheel) runs simulations without a pip-installed cocotb. Editable
+# installs default to off: their libraries are loaded from the source tree,
+# where the interpreter already finds the packages.
+option(COCOTB_EMBED_PYTHON "Embed the cocotb Python packages into the simulator libraries" ON)
 if(SKBUILD_STATE STREQUAL "editable")
     set_property(CACHE COCOTB_EMBED_PYTHON PROPERTY VALUE OFF)
 endif()
@@ -286,9 +308,8 @@ if(COCOTB_EMBED_PYTHON)
     )
     add_custom_target(cocotb_embed_zip DEPENDS "${COCOTB_EMBED_ZIP}")
 
-    target_sources(simulator PRIVATE ${SHARE_LIB_DIR}/pygpi/embed_zip.cpp)
-    target_compile_definitions(simulator PRIVATE COCOTB_HAVE_EMBEDDED_ZIP)
-    add_dependencies(simulator cocotb_embed_zip)
+    list(APPEND COCOTB_FAMILY_EXTRA_SOURCES ${SHARE_LIB_DIR}/pygpi/embed_zip.cpp)
+    string(APPEND COCOTB_FAMILY_DEFINES " COCOTB_HAVE_EMBEDDED_ZIP")
 
     if(WIN32)
         # A resource is the portable way to carry the bytes on Windows: the
@@ -306,7 +327,7 @@ if(COCOTB_EMBED_PYTHON)
         if(NOT _embed_zip_rc_old STREQUAL _embed_zip_rc_body)
             file(WRITE "${COCOTB_EMBED_ZIP_RC}" "${_embed_zip_rc_body}")
         endif()
-        target_sources(simulator PRIVATE "${COCOTB_EMBED_ZIP_RC}")
+        list(APPEND COCOTB_FAMILY_EXTRA_SOURCES "${COCOTB_EMBED_ZIP_RC}")
     else()
         enable_language(ASM)
         if(APPLE)
@@ -346,83 +367,60 @@ if(COCOTB_EMBED_PYTHON)
             COMMENT "Refreshing cocotb_embed_zip.s for the embedded zip"
             VERBATIM
         )
-        target_sources(simulator PRIVATE "${COCOTB_EMBED_ZIP_ASM}")
+        list(APPEND COCOTB_FAMILY_EXTRA_SOURCES "${COCOTB_EMBED_ZIP_ASM}")
     endif()
 else()
     message(STATUS "Embedding the cocotb Python packages: OFF")
 endif()
 
-function(add_vpi_library SIM_NAME SIM_DEFINE)
-    set(options "")
-    set(oneValueArgs "")
-    set(multiValueArgs "EXTRA_LIBS" "EXTRA_LIB_DIRS")
-    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+# One library per simulator family: everything a simulator needs from cocotb,
+# including every interface it can drive. All of them are built into a single
+# file, so a simulator that loads two interfaces loads the same library twice
+# and the entry symbols are distinct.
+#
+#   add_family_library(<family> <SIM_DEFINE>
+#       INTERFACES <VPI|VHPI|FLI>...
+#       [EXTRA_LIBS ...] [EXTRA_LIB_DIRS ...])
+function(add_family_library FAMILY SIM_DEFINE)
+    cmake_parse_arguments(PARSE_ARGV 2 ARG "" ""
+        "INTERFACES;EXTRA_LIBS;EXTRA_LIB_DIRS")
 
-    string(TOLOWER ${SIM_NAME} SIM_LOWER)
-    set(TARGET_NAME gpi_impl_${SIM_LOWER}_vpi)
+    set(TARGET_NAME cocotb_${FAMILY})
+    set(SOURCES ${COCOTB_FAMILY_SOURCES} ${COCOTB_FAMILY_EXTRA_SOURCES})
+    set(DEFINES GPI_EXPORTS PYGPI_EXPORTS ${SIM_DEFINE} ${COCOTB_FAMILY_DEFINES})
+
+    foreach(INTERFACE IN LISTS ARG_INTERFACES)
+        string(TOUPPER "${INTERFACE}" INTERFACE_UPPER)
+        list(APPEND SOURCES ${COCOTB_${INTERFACE_UPPER}_SOURCES})
+        list(APPEND DEFINES COCOTB_${INTERFACE_UPPER}_DYN)
+        if(INTERFACE_UPPER STREQUAL "FLI")
+            # FliImpl.hpp maps COCOTBFLI_EXPORT to COCOTB_EXPORT only for the
+            # library that defines the FLI entry points.
+            list(APPEND DEFINES COCOTBFLI_EXPORTS)
+        endif()
+    endforeach()
 
     add_cocotb_library(${TARGET_NAME}
-        SOURCES
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiImpl.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiCbHdl.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiObj.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiIterator.cpp
-            ${SHARE_LIB_DIR}/gpi/vpi/VpiSignal.cpp
-        DEFINES COCOTBVPI_EXPORTS GPI_IMPL_ENTRY=gpi_impl_${SIM_LOWER}_vpi_entry ${SIM_DEFINE}
-        LIBRARIES gpi ${ARG_EXTRA_LIBS}
+        SOURCES ${SOURCES}
+        DEFINES ${DEFINES}
+        LIBRARIES ${GPI_LINK_LIBS} ${ARG_EXTRA_LIBS}
     )
 
-    if(WIN32)
-        target_link_directories(${TARGET_NAME} PRIVATE ${COCOTB_DEF_DIR})
+    if(COCOTB_EMBED_PYTHON)
+        add_dependencies(${TARGET_NAME} cocotb_embed_zip)
     endif()
 
     if(ARG_EXTRA_LIB_DIRS)
         target_link_directories(${TARGET_NAME} PRIVATE ${ARG_EXTRA_LIB_DIRS})
     endif()
 
-    if(NOT WIN32)
-        if(APPLE)
-            target_link_options(${TARGET_NAME} PRIVATE -undefined dynamic_lookup)
-        else()
-            target_link_options(${TARGET_NAME} PRIVATE -Wl,--allow-shlib-undefined)
-        endif()
-    endif()
-endfunction()
-
-function(add_vhpi_library SIM_NAME SIM_DEFINE)
-    set(options "")
-    set(oneValueArgs "")
-    set(multiValueArgs "EXTRA_LIBS" "EXTRA_LIB_DIRS")
-    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-    string(TOLOWER ${SIM_NAME} SIM_LOWER)
-    set(TARGET_NAME gpi_impl_${SIM_LOWER}_vhpi)
-
-    add_cocotb_library(${TARGET_NAME}
-        SOURCES
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiImpl.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiCbHdl.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiObj.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiIterator.cpp
-            ${SHARE_LIB_DIR}/gpi/vhpi/VhpiSignal.cpp
-        DEFINES COCOTBVHPI_EXPORTS GPI_IMPL_ENTRY=gpi_impl_${SIM_LOWER}_vhpi_entry ${SIM_DEFINE}
-        LIBRARIES gpi ${ARG_EXTRA_LIBS}
-    )
-
-    if(WIN32)
-        target_link_directories(${TARGET_NAME} PRIVATE ${COCOTB_DEF_DIR})
-    endif()
-
-    if(ARG_EXTRA_LIB_DIRS)
-        target_link_directories(${TARGET_NAME} PRIVATE ${ARG_EXTRA_LIB_DIRS})
-    endif()
-
-    if(NOT WIN32)
-        if(APPLE)
-            target_link_options(${TARGET_NAME} PRIVATE -undefined dynamic_lookup)
-        else()
-            target_link_options(${TARGET_NAME} PRIVATE -Wl,--allow-shlib-undefined)
-        endif()
+    # The simulator's own symbols arrive through the abi dispatch tables and
+    # libpython's through pygpi::api, so an unresolved symbol here means one of
+    # those tables is incomplete rather than that a platform is unsupported.
+    if(APPLE)
+        target_link_options(${TARGET_NAME} PRIVATE -undefined dynamic_lookup)
+    elseif(NOT WIN32)
+        target_link_options(${TARGET_NAME} PRIVATE -Wl,--no-undefined)
     endif()
 endfunction()
 
@@ -430,116 +428,65 @@ set(ICARUS_EXTRA_LIBS "")
 if(WIN32)
     set(ICARUS_EXTRA_LIBS icarus)
 endif()
-add_vpi_library(ICARUS ICARUS EXTRA_LIBS ${ICARUS_EXTRA_LIBS})
+add_family_library(icarus ICARUS
+    INTERFACES VPI
+    EXTRA_LIBS ${ICARUS_EXTRA_LIBS}
+)
 
 set(MODELSIM_EXTRA_LIBS "")
 if(WIN32)
     set(MODELSIM_EXTRA_LIBS modelsim)
 endif()
-
-add_vpi_library(MODELSIM MODELSIM EXTRA_LIBS ${MODELSIM_EXTRA_LIBS})
-add_vhpi_library(MODELSIM MODELSIM EXTRA_LIBS ${MODELSIM_EXTRA_LIBS})
-
-add_cocotb_library(gpi_impl_modelsim_fli
-    SOURCES
-        ${SHARE_LIB_DIR}/gpi/fli/FliImpl.cpp
-        ${SHARE_LIB_DIR}/gpi/fli/FliCbHdl.cpp
-        ${SHARE_LIB_DIR}/gpi/fli/FliObjHdl.cpp
-    DEFINES COCOTBFLI_EXPORTS GPI_IMPL_ENTRY=gpi_impl_modelsim_fli_entry
-    LIBRARIES gpi ${MODELSIM_EXTRA_LIBS}
+add_family_library(modelsim MODELSIM
+    INTERFACES VPI VHPI FLI
+    EXTRA_LIBS ${MODELSIM_EXTRA_LIBS}
 )
-
-if(WIN32)
-    target_link_directories(gpi_impl_modelsim_fli PRIVATE ${COCOTB_DEF_DIR})
-endif()
-
-if(NOT WIN32)
-    if(APPLE)
-        target_link_options(gpi_impl_modelsim_fli PRIVATE -undefined dynamic_lookup)
-    else()
-        target_link_options(gpi_impl_modelsim_fli PRIVATE -Wl,--allow-shlib-undefined)
-    endif()
-endif()
 
 set(GHDL_EXTRA_LIBS "")
 if(WIN32)
     set(GHDL_EXTRA_LIBS ghdl)
 endif()
-add_vpi_library(GHDL GHDL EXTRA_LIBS ${GHDL_EXTRA_LIBS})
-
-if(UNIX)
-    add_vpi_library(IUS IUS)
-    add_vhpi_library(IUS IUS)
-    add_vpi_library(VCS VCS)
-    add_vpi_library(VERILATOR VERILATOR)
-    add_vpi_library(DSim DSim)
-endif()
+add_family_library(ghdl GHDL
+    INTERFACES VPI
+    EXTRA_LIBS ${GHDL_EXTRA_LIBS}
+)
 
 set(NVC_EXTRA_LIBS "")
 if(WIN32)
     set(NVC_EXTRA_LIBS nvcvhpi)
 endif()
-add_vhpi_library(NVC NVC EXTRA_LIBS ${NVC_EXTRA_LIBS})
+add_family_library(nvc NVC
+    INTERFACES VHPI
+    EXTRA_LIBS ${NVC_EXTRA_LIBS}
+)
 
 set(ALDEC_EXTRA_LIBS "")
 if(WIN32)
     set(ALDEC_EXTRA_LIBS aldec)
 endif()
-add_vpi_library(ALDEC ALDEC EXTRA_LIBS ${ALDEC_EXTRA_LIBS})
-add_vhpi_library(ALDEC ALDEC EXTRA_LIBS ${ALDEC_EXTRA_LIBS})
+add_family_library(aldec ALDEC
+    INTERFACES VPI VHPI
+    EXTRA_LIBS ${ALDEC_EXTRA_LIBS}
+)
 
-if(WIN32)
-    if(MSVC)
-        foreach(SIM icarus modelsim aldec ghdl nvcvhpi)
-            add_custom_command(
-                OUTPUT ${COCOTB_DEF_DIR}/${SIM}.lib
-                COMMAND lib /def:${COCOTB_DEF_DIR}/${SIM}.def /out:${COCOTB_DEF_DIR}/${SIM}.lib /machine:$<IF:$<EQUAL:${CMAKE_SIZEOF_VOID_P},8>,X64,X86>
-                DEPENDS ${COCOTB_DEF_DIR}/${SIM}.def
-                COMMENT "Generating import library for ${SIM}"
-            )
-            add_custom_target(${SIM}_import_lib ALL DEPENDS ${COCOTB_DEF_DIR}/${SIM}.lib)
-        endforeach()
-    else()
-        foreach(SIM icarus modelsim aldec ghdl nvcvhpi)
-            add_custom_command(
-                OUTPUT ${COCOTB_DEF_DIR}/lib${SIM}.a
-                COMMAND dlltool -d ${COCOTB_DEF_DIR}/${SIM}.def -l ${COCOTB_DEF_DIR}/lib${SIM}.a
-                DEPENDS ${COCOTB_DEF_DIR}/${SIM}.def
-                COMMENT "Generating import library for ${SIM}"
-            )
-            add_custom_target(${SIM}_import_lib ALL DEPENDS ${COCOTB_DEF_DIR}/lib${SIM}.a)
-        endforeach()
-    endif()
-endif()
-
-if(WIN32)
-    add_dependencies(gpi_impl_icarus_vpi icarus_import_lib)
-    add_dependencies(gpi_impl_modelsim_vpi modelsim_import_lib)
-    add_dependencies(gpi_impl_modelsim_vhpi modelsim_import_lib)
-    add_dependencies(gpi_impl_modelsim_fli modelsim_import_lib)
-    add_dependencies(gpi_impl_ghdl_vpi ghdl_import_lib)
-    add_dependencies(gpi_impl_nvc_vhpi nvcvhpi_import_lib)
-    add_dependencies(gpi_impl_aldec_vpi aldec_import_lib)
-    add_dependencies(gpi_impl_aldec_vhpi aldec_import_lib)
+if(UNIX)
+    add_family_library(ius IUS INTERFACES VPI VHPI)
+    add_family_library(vcs VCS INTERFACES VPI)
+    add_family_library(verilator VERILATOR INTERFACES VPI)
+    add_family_library(dsim DSim INTERFACES VPI)
 endif()
 
 if(SKBUILD AND NOT SKBUILD_STATE STREQUAL "editable")
-    install(TARGETS cocotb_bootstrap gpi DESTINATION cocotb/libs)
-
-    set(SIM_TARGETS
-        gpi_impl_icarus_vpi gpi_impl_modelsim_vpi gpi_impl_modelsim_vhpi
-        gpi_impl_modelsim_fli gpi_impl_ghdl_vpi gpi_impl_aldec_vpi
-        gpi_impl_aldec_vhpi gpi_impl_nvc_vhpi)
+    # One library per simulator family, one directory. There is no separate
+    # Python extension: `cocotb.simulator` is a builtin module registered by
+    # pygpi_initialize() in these same files.
+    set(COCOTB_FAMILY_TARGETS
+        cocotb_icarus cocotb_modelsim cocotb_ghdl cocotb_aldec cocotb_nvc)
 
     if(UNIX)
-        list(APPEND SIM_TARGETS
-            gpi_impl_ius_vpi gpi_impl_ius_vhpi gpi_impl_vcs_vpi
-            gpi_impl_verilator_vpi gpi_impl_dsim_vpi)
+        list(APPEND COCOTB_FAMILY_TARGETS
+            cocotb_ius cocotb_vcs cocotb_verilator cocotb_dsim)
     endif()
 
-    install(TARGETS ${SIM_TARGETS} DESTINATION cocotb/libs OPTIONAL)
-
-    install(TARGETS simulator
-        RUNTIME DESTINATION cocotb
-        LIBRARY DESTINATION cocotb)
+    install(TARGETS ${COCOTB_FAMILY_TARGETS} DESTINATION cocotb/libs OPTIONAL)
 endif()

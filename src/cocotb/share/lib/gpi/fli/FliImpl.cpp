@@ -1135,9 +1135,12 @@ void FliIterator::populate_handle_list(FliIterator::OneToMany childType) {
 // Loaded by GPI via GPI_IMPL.
 static void register_impl() {
     LOG_TRACE("GPI Init => [ FLI (register_impl) ]");
+#ifdef COCOTB_FLI_DYN
+    cocotb_abi::fli_dispatch_fill();
+#endif
     auto fli_table = new FliImpl("FLI");
     gpi_register_impl(fli_table);
     LOG_TRACE("[ FLI (register_impl) ] => GPI Init");
 }
 
-GPI_ENTRY_POINT(cocotbfli, register_impl);
+GPI_ENTRY_POINT(gpi_impl_cocotbfli_entry, register_impl);

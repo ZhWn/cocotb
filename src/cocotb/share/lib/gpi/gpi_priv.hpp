@@ -299,10 +299,19 @@ GPI_EXPORT void gpi_end_sim();
 
 typedef void (*layer_entry_func)();
 
-/* Use this macro in an implementation layer to define an entry point */
-#define GPI_ENTRY_POINT(NAME, func)                 \
-    extern "C" {                                    \
-    COCOTB_EXPORT void GPI_IMPL_ENTRY() { func(); } \
+/* Look up a symbol in the process' global scope (the simulator executable or
+ * one of the modules it loaded). Used by the interface dispatch tables in
+ * gpi/abi/ to resolve the simulator ABI at runtime. */
+GPI_EXPORT void *utils_lookup_global_sym(const char *sym_name);
+
+/* Use this macro in an implementation layer to define an entry point.
+ *
+ * NAME is the exported symbol itself, so that one library can carry several
+ * implementation layers: every layer passes its own name and no per-target
+ * compile definition is needed. */
+#define GPI_ENTRY_POINT(NAME, func)             \
+    extern "C" {                                \
+    COCOTB_EXPORT void NAME() { func(); }        \
     }
 
 #endif /* COCOTB_GPI_PRIV_H_ */

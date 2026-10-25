@@ -10,11 +10,13 @@ import os
 import subprocess
 import sys
 
-from cocotb_tools.config import _shared_library_path
+from cocotb_tools.config import _family_library_path
 
 
 def test_gpi_impl_missing_entry_point() -> None:
-    library = _shared_library_path("gpi")
+    # Every simulator family gets one library that carries the bootstrapper,
+    # the GPI core and the PyGPI layer, so any family will do.
+    library = _family_library_path("icarus")
     entry_point = "does_not_exist"
     # Use a loadable library so initialization reaches the symbol lookup.
     # GPI calls exit() on failure, so invoke it in a subprocess.

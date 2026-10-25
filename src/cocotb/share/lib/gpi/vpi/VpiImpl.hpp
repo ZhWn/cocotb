@@ -13,6 +13,7 @@
 #include <map>
 #include <vector>
 
+#include "../abi/vpi_dispatch.hpp"
 #include "../gpi_priv.hpp"
 #include "../logging.hpp"
 #include "_vendor/vpi/sv_vpi_user.h"

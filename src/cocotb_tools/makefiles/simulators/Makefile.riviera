@@ -112,7 +112,7 @@ endif
 ifneq ($(VERILOG_SOURCES),)
 	@echo 'set cocotb_sim_bootstrap $$::env(COCOTB_BOOTSTRAP)' >> $@
 	@echo 'set cocotb_sim_gpi_impl $$::env(GPI_IMPL)' >> $@
-	@echo 'set ::env(COCOTB_BOOTSTRAP) {$(shell $(PYTHON_BIN) -m cocotb_tools.config --gpi-entry-point)}' >> $@
+	@echo 'set ::env(COCOTB_BOOTSTRAP) {$(shell $(PYTHON_BIN) -m cocotb_tools.config --gpi-entry-point $(SIM_LOWERCASE))}' >> $@
 	@echo 'set ::env(GPI_IMPL) {$(shell $(PYTHON_BIN) -m cocotb_tools.config --gpi-impl riviera vpi)}' >> $@
 	@echo "alog -work $(TOPLEVEL_LIBRARY) $(ALOG_ARGS) $(call to_tcl_path,$(VERILOG_SOURCES))" >> $@
 	@echo 'set ::env(COCOTB_BOOTSTRAP) $$cocotb_sim_bootstrap' >> $@

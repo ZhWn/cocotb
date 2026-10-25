@@ -5,7 +5,7 @@
 #ifndef PY_GPI_LOGGING_H
 #define PY_GPI_LOGGING_H
 
-#include <Python.h>
+#include "./pyapi.hpp"  // Python.h plus the runtime symbol table redirects
 #include <gpi.h>
 
 #include <string>

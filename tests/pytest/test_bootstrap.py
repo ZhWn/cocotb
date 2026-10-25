@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from cocotb_tools.config import _shared_library_path, bootstrap_entry
+from cocotb_tools.config import _family_library_path, bootstrap_entry
 
 
 @pytest.mark.parametrize(
@@ -31,7 +31,9 @@ from cocotb_tools.config import _shared_library_path, bootstrap_entry
     ],
 )
 def test_bootstrap_entry_point_failure(entry_point: str, expected_message: str) -> None:
-    library = _shared_library_path("gpi")
+    # Every simulator family gets one library that carries the bootstrapper,
+    # the GPI core and the PyGPI layer, so any family will do.
+    library = _family_library_path("icarus")
     # The bootstrapper calls exit() on failure, so invoke it in a subprocess.
     result = subprocess.run(
         [
@@ -45,7 +47,7 @@ def test_bootstrap_entry_point_failure(entry_point: str, expected_message: str) 
                 "bootstrap.cocotb_bootstrap_entry.restype = None\n"
                 "bootstrap.cocotb_bootstrap_entry()\n"
             ),
-            str(_shared_library_path("cocotb_bootstrap")),
+            str(_family_library_path("icarus")),
         ],
         env={
             **os.environ,

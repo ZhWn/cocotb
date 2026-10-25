@@ -12,6 +12,7 @@
 #include <map>
 #include <vector>
 
+#include "../abi/fli_dispatch.hpp"
 #include "../gpi_priv.hpp"
 #include "_vendor/fli/mti.h"
 

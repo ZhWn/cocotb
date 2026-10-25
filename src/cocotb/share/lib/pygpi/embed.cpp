@@ -6,7 +6,7 @@
 
 // Embed Python into the simulator using GPI
 
-#include <Python.h>
+#include "./pyapi.hpp"
 #include <gpi.h>  // gpi_register_*
 
 #include <cassert>
@@ -159,6 +159,71 @@ static int inject_embedded_zip() {
     return 0;
 }
 
+// Python <= 3.10's BuiltinImporter.find_spec() returns None whenever it is
+// handed a non-None path, and importing a submodule always passes the parent
+// package's __path__. The AppendInittab entry is therefore invisible to
+// `import cocotb.simulator` on those versions, and the on-disk simulator.py
+// stub gets loaded instead, failing with "No simulator available!" in a
+// simulation. CPython dropped that guard in 3.11. This snippet installs a
+// finder at the front of sys.meta_path that answers for `cocotb.simulator`
+// alone, ignoring the path argument; every other import falls through to the
+// untouched finder chain.
+static const char *const cocotb_simulator_finder_snippet =
+    "import importlib.machinery\n"
+    "import sys\n"
+    "\n"
+    "class _CocotbBuiltinFinder:\n"
+    "    def find_spec(self, fullname, path=None, target=None):\n"
+    "        if fullname == 'cocotb.simulator':\n"
+    "            return importlib.machinery.BuiltinImporter.find_spec(\n"
+    "                fullname, None)\n"
+    "        return None\n"
+    "\n"
+    "sys.meta_path.insert(0, _CocotbBuiltinFinder())\n";
+
+// Install the finder above. Like a failed AppendInittab, failure is fatal.
+static int install_builtin_simulator_finder() {
+    PyObject *globals = PyDict_New();
+    PyObject *builtins = globals != NULL ? PyEval_GetBuiltins() : NULL;
+    if (globals == NULL || builtins == NULL ||
+        PyDict_SetItemString(globals, "__builtins__", builtins) != 0) {
+        // LCOV_EXCL_START
+        if (PyErr_Occurred() != NULL) {
+            PyErr_Print();
+        }
+        Py_XDECREF(globals);
+        PYGPI_LOG_ERROR(
+            "Failed to prepare globals for the cocotb.simulator import "
+            "finder");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+
+    PyObject *code = Py_CompileString(cocotb_simulator_finder_snippet,
+                                      "<cocotb sim finder>", Py_file_input);
+    if (code == NULL) {
+        // LCOV_EXCL_START
+        PyErr_Print();
+        Py_DECREF(globals);
+        PYGPI_LOG_ERROR("Failed to compile the cocotb.simulator import finder");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+
+    PyObject *result = PyEval_EvalCode(code, globals, globals);
+    Py_DECREF(code);
+    Py_DECREF(globals);
+    if (result == NULL) {
+        // LCOV_EXCL_START
+        PyErr_Print();
+        PYGPI_LOG_ERROR("Failed to install the cocotb.simulator import finder");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+    Py_DECREF(result);
+    return 0;
+}
+
 extern "C" PYGPI_EXPORT int pygpi_initialize(void) {
     pygpi_init_debug();
     pygpi_logging_initialize();
@@ -174,31 +239,36 @@ extern "C" PYGPI_EXPORT int pygpi_initialize(void) {
     }
     python_init_called = 1;
 
+    // Resolve the Python C API before anything uses it: this library is not
+    // linked against libpython, every symbol comes from ::pygpi::api.
+    if (!pygpi::ensure_loaded()) {
+        // LCOV_EXCL_START
+        PYGPI_LOG_ERROR("Unable to load the Python C API from libpython");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+
     // must set program name to Python executable before initialization, so
     // initialization can determine path from executable
 
     static wchar_t interpreter_path[PATH_MAX], sys_executable[PATH_MAX];
 
-    // Publishing needs no interpreter, and the answer decides whether the
-    // simulator module must be registered as a builtin, which only works
-    // before Python is initialized.
+    // Publishing needs no interpreter, and the packages may reach Python
+    // through something that cannot provide an extension module (the embedded
+    // zip). `cocotb.simulator` is therefore always registered as a builtin:
+    // the hook only works before the interpreter is initialized, and it is
+    // harmless when the Python layer comes from a directory on sys.path.
 #ifdef COCOTB_HAVE_EMBEDDED_ZIP
     embedded_zip_path = pygpi_publish_embedded_zip();
 #else
     embedded_zip_path.clear();
 #endif
-    if (!embedded_zip_path.empty()) {
-        // The packages come from the published zip, and zipimport cannot load
-        // extension modules, so `import cocotb.simulator` must resolve to this
-        // very library. PyImport_AppendInittab is the only hook that runs
-        // early enough.
-        if (PyImport_AppendInittab("cocotb.simulator", PyInit_simulator) != 0) {
-            // LCOV_EXCL_START
-            PYGPI_LOG_ERROR(
-                "Failed to register cocotb.simulator as a builtin module");
-            return -1;
-            // LCOV_EXCL_STOP
-        }
+    if (PyImport_AppendInittab("cocotb.simulator", PyInit_simulator) != 0) {
+        // LCOV_EXCL_START
+        PYGPI_LOG_ERROR(
+            "Failed to register cocotb.simulator as a builtin module");
+        return -1;
+        // LCOV_EXCL_STOP
     }
 
     if (get_interpreter_path(interpreter_path, sizeof(interpreter_path))) {
@@ -209,42 +279,27 @@ extern "C" PYGPI_EXPORT int pygpi_initialize(void) {
     PYGPI_LOG_INFO("Using Python %s interpreter at %ls", PY_VERSION,
                    interpreter_path);
 
-    /* Use the new Python Initialization Configuration from Python 3.8. */
-    PyConfig config;
-    PyStatus status;
-
-    PyConfig_InitPythonConfig(&config);
-    DEFER(PyConfig_Clear(&config));
-
-    PyConfig_SetString(&config, &config.executable, interpreter_path);
-
-    status = PyConfig_SetArgv(&config, 1, argv);
-    if (PyStatus_Exception(status)) {
-        // LCOV_EXCL_START
-        PYGPI_LOG_ERROR("Failed to set ARGV during the Python initialization");
-        if (status.err_msg != NULL) {
-            PYGPI_LOG_ERROR("\terror: %s", status.err_msg);
-        }
-        if (status.func != NULL) {
-            PYGPI_LOG_ERROR("\tfunction: %s", status.func);
-        }
-        return -1;
-        // LCOV_EXCL_STOP
-    }
-
-    status = Py_InitializeFromConfig(&config);
-    if (PyStatus_Exception(status)) {
-        // LCOV_EXCL_START
-        PYGPI_LOG_ERROR("Failed to initialize Python");
-        if (status.err_msg != NULL) {
-            PYGPI_LOG_ERROR("\terror: %s", status.err_msg);
-        }
-        if (status.func != NULL) {
-            PYGPI_LOG_ERROR("\tfunction: %s", status.func);
-        }
-        return -1;
-        // LCOV_EXCL_STOP
-    }
+    // Initialize the interpreter through the classic embedding API.
+    // PyConfig/Py_InitializeFromConfig are not part of the stable ABI and
+    // pygpi is compiled with Py_LIMITED_API, so the deprecated-but-stable
+    // Py_SetProgramName()/PySys_SetArgvEx() pair is used instead.
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    Py_SetProgramName(interpreter_path);
+    Py_Initialize();
+    PySys_SetArgvEx(1, argv, 0);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     /* Sanity check: make sure sys.executable was initialized to
      * interpreter_path. */
@@ -263,6 +318,12 @@ extern "C" PYGPI_EXPORT int pygpi_initialize(void) {
         PYGPI_LOG_ERROR(
             "Unexpected sys.executable value (expected '%ls', got '%ls')",
             interpreter_path, sys_executable);
+        // LCOV_EXCL_STOP
+    }
+
+    if (install_builtin_simulator_finder() != 0) {
+        // LCOV_EXCL_START
+        return -1;
         // LCOV_EXCL_STOP
     }
 

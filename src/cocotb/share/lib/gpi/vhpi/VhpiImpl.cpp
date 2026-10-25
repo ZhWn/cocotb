@@ -1119,9 +1119,12 @@ bool VhpiImpl::compare_generate_labels(const std::string &a,
 // Loaded by GPI via GPI_IMPL.
 static void register_impl() {
     LOG_TRACE("GPI Init => [ VHPI (register_impl) ]");
+#ifdef COCOTB_VHPI_DYN
+    cocotb_abi::vhpi_dispatch_fill();
+#endif
     auto vhpi_table = new VhpiImpl("VHPI");
     gpi_register_impl(vhpi_table);
     LOG_TRACE("[ VHPI (register_impl) ] => GPI Init");
 }
 
-GPI_ENTRY_POINT(cocotbvhpi, register_impl)
+GPI_ENTRY_POINT(gpi_impl_cocotbvhpi_entry, register_impl)

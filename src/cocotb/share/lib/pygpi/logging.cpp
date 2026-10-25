@@ -2,7 +2,7 @@
 // Licensed under the Revised BSD License, see LICENSE for details.
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include <Python.h>  // all things Python
+#include "./pyapi.hpp"  // all things Python, through the runtime symbol table
 #include <gpi.h>     // all things GPI logging
 
 #include <cstdarg>  // va_list, va_copy, va_end

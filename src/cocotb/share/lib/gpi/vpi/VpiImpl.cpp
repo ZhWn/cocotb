@@ -871,9 +871,12 @@ const char *VpiImpl::get_type_delimiter(GpiObjHdl *obj_hdl) {
 // Loaded by GPI via GPI_IMPL.
 static void register_impl() {
     LOG_TRACE("GPI Init => [ VPI (register_impl) ]");
+#ifdef COCOTB_VPI_DYN
+    cocotb_abi::vpi_dispatch_fill();
+#endif
     auto vpi_table = new VpiImpl("VPI");
     gpi_register_impl(vpi_table);
     LOG_TRACE("[ VPI (register_impl) ] => GPI Init");
 }
 
-GPI_ENTRY_POINT(cocotbvpi, register_impl)
+GPI_ENTRY_POINT(gpi_impl_cocotbvpi_entry, register_impl)

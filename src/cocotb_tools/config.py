@@ -127,90 +127,98 @@ def bootstrap_entry(
     return f"{library_str},{entry_point}"
 
 
-def _shared_library_path(name: str) -> Path:
+# Every simulator family is served by exactly one library, which holds the
+# bootstrap layer, the GPI core, the PyGPI layer and every interface that
+# family can drive. Simulators that share an implementation share the file, so
+# the value here is both the library name (`cocotb_<family>`) and the source of
+# the `gpi_impl_cocotb<interface>_entry` symbol names.
+_SIMULATOR_FAMILIES: dict[str, str] = {
+    "icarus": "icarus",
+    "verilator": "verilator",
+    "questa": "modelsim",
+    "modelsim": "modelsim",
+    "cvc": "modelsim",
+    "ius": "ius",
+    "xcelium": "ius",
+    "vcs": "vcs",
+    "ghdl": "ghdl",
+    "riviera": "aldec",
+    "activehdl": "aldec",
+    "nvc": "nvc",
+    "dsim": "dsim",
+}
+
+# Interfaces compiled into each family library. Kept in sync with the
+# add_family_library() calls in CMakeLists.txt.
+_FAMILY_INTERFACES: dict[str, tuple[str, ...]] = {
+    "icarus": ("vpi",),
+    "verilator": ("vpi",),
+    "modelsim": ("vpi", "vhpi", "fli"),
+    "ius": ("vpi", "vhpi"),
+    "vcs": ("vpi",),
+    "ghdl": ("vpi",),
+    "aldec": ("vpi", "vhpi"),
+    "nvc": ("vhpi",),
+    "dsim": ("vpi",),
+}
+
+
+def simulator_family(simulator: str) -> str:
+    """Return the name of the library family that serves *simulator*."""
+    try:
+        return _SIMULATOR_FAMILIES[simulator.lower()]
+    except KeyError:
+        raise ValueError(
+            "Wrong simulator name. Supported: "
+            + ", ".join(sorted(_SIMULATOR_FAMILIES))
+        ) from None
+
+
+def _family_library_path(simulator: str) -> Path:
+    """Return the one library that serves *simulator*."""
+    family = simulator_family(simulator)
+
     extension = ".dll" if os.name == "nt" else ".so"
+    expected = libs_dir / f"cocotb_{family}{extension}"
     for prefix in ("", "lib"):
-        library_path = libs_dir / f"{prefix}{name}{extension}"
+        library_path = libs_dir / f"{prefix}cocotb_{family}{extension}"
         if library_path.is_file():
             return library_path
-    raise FileNotFoundError(f"Shared library {name!r} not found")
+    raise FileNotFoundError(f"Shared library {expected.as_posix()!r} not found")
 
 
-def gpi_entry_point() -> str:
-    """Return the libgpi entry for ``COCOTB_BOOTSTRAP``."""
-    return bootstrap_entry(_shared_library_path("gpi"), "gpi_initialize")
-
-
-def pygpi_entry_point() -> str:
-    import cocotb.simulator  # noqa: PLC0415
-
-    return bootstrap_entry(
-        Path(cocotb.simulator.__file__).resolve(), "pygpi_initialize"
-    )
-
-
-def _gpi_impl_path(interface: str, simulator: str) -> Path:
+def _interface_name(interface: str, simulator: str) -> str:
+    """Validate *interface* against the family that serves *simulator*."""
     interface_name = interface.lower()
-    supported_interfaces = ["vpi", "vhpi", "fli"]
-    if interface_name not in supported_interfaces:
+    family = _SIMULATOR_FAMILIES.get(simulator.lower())
+    supported = _FAMILY_INTERFACES.get(family, ("vpi", "vhpi", "fli"))
+    if interface_name not in supported:
         raise ValueError(
-            "Wrong interface used. Supported: " + ", ".join(supported_interfaces)
+            f"Interface {interface!r} is not supported for simulator "
+            f"{simulator!r}. Supported: " + ", ".join(supported)
         )
+    return interface_name
 
-    simulator_name = simulator.lower()
-    supported_sims = [
-        "icarus",
-        "verilator",
-        "questa",
-        "modelsim",
-        "ius",
-        "xcelium",
-        "vcs",
-        "ghdl",
-        "riviera",
-        "activehdl",
-        "cvc",
-        "nvc",
-        "dsim",
-    ]
-    if simulator not in supported_sims:
-        raise ValueError(
-            "Wrong simulator name. Supported: " + ", ".join(supported_sims)
-        )
 
-    if simulator_name in ["questa", "cvc"]:
-        library_name = "modelsim"
-    elif simulator_name == "xcelium":
-        library_name = "ius"
-    elif simulator_name in ["riviera", "activehdl"]:
-        library_name = "aldec"
-    else:
-        library_name = simulator_name
+def gpi_entry_point(simulator: str) -> str:
+    """Return the GPI entry of the library serving *simulator*."""
+    return bootstrap_entry(_family_library_path(simulator), "gpi_initialize")
 
-    if os.name == "nt":
-        lib_ext = ".dll"
-    else:
-        lib_ext = ".so"
 
-    # check if compiled with msvc
-    if (libs_dir / "gpi.dll").is_file():
-        lib_prefix = ""
-    else:
-        lib_prefix = "lib"
-
-    filename = f"{lib_prefix}gpi_impl_{library_name}_{interface_name}{lib_ext}"
-    return libs_dir / filename
+def pygpi_entry_point(simulator: str) -> str:
+    """Return the PyGPI entry of the library serving *simulator*."""
+    return bootstrap_entry(_family_library_path(simulator), "pygpi_initialize")
 
 
 def lib_entry(interface: str, simulator: str) -> str:
     """Return the bootstrap library and, when required, its entry function."""
 
-    interface_name = interface.lower()
+    interface_name = _interface_name(interface, simulator)
     simulator_name = simulator.lower()
-    # Validate the interface and simulator names.
-    _gpi_impl_path(interface_name, simulator_name)
-    library = _shared_library_path("cocotb_bootstrap").as_posix()
+    library = _family_library_path(simulator).as_posix()
 
+    # These simulators load the library themselves and call the entry point by
+    # name, so it has to be spelled out.
     requires_entry_function = {
         ("vpi", "cvc"),
         ("vpi", "ius"),
@@ -229,12 +237,11 @@ def gpi_impl(simulator: str, *interfaces: str) -> str:
     if not interfaces:
         raise ValueError("At least one GPI interface is required")
 
+    library = _family_library_path(simulator).as_posix()
     entries = []
     for interface in interfaces:
-        interface_name = interface.lower()
-        library_path = _gpi_impl_path(interface_name, simulator)
-        entry_point = f"{library_path.stem.removeprefix('lib')}_entry"
-        entries.append(f"{library_path.as_posix()}:{entry_point}")
+        interface_name = _interface_name(interface, simulator)
+        entries.append(f"{library}:gpi_impl_cocotb{interface_name}_entry")
     return ",".join(entries)
 
 
@@ -286,13 +293,15 @@ def _get_parser() -> argparse.ArgumentParser:
     )
     group.add_argument(
         "--gpi-entry-point",
-        action="store_true",
-        help="Print the libgpi entry point for use in COCOTB_BOOTSTRAP",
+        help="Print the GPI entry point of the library serving the given simulator, for use in COCOTB_BOOTSTRAP",
+        nargs=1,
+        metavar="SIMULATOR",
     )
     group.add_argument(
         "--pygpi-entry-point",
-        action="store_true",
-        help="Print the PyGPI entry point for use in COCOTB_BOOTSTRAP",
+        help="Print the PyGPI entry point of the library serving the given simulator, for use in COCOTB_BOOTSTRAP",
+        nargs=1,
+        metavar="SIMULATOR",
     )
     group.add_argument(
         "--version",
@@ -330,9 +339,9 @@ def main() -> None:
             parser.error("--gpi-impl requires at least one interface")
         print(gpi_impl(simulator, *interfaces))
     elif args.gpi_entry_point:
-        print(gpi_entry_point())
+        print(gpi_entry_point(args.gpi_entry_point[0]))
     elif args.pygpi_entry_point:
-        print(pygpi_entry_point())
+        print(pygpi_entry_point(args.pygpi_entry_point[0]))
     elif args.version:
         print(_get_version())
 

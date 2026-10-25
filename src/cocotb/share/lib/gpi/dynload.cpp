@@ -9,7 +9,12 @@
 #include <cstdio>
 
 #ifdef _WIN32
+// psapi.h must come after windows.h (it does not include windows.h itself),
+// but clang-format's include sorting would put it first.
+// clang-format off
 #include <windows.h>
+#include <psapi.h>
+// clang-format on
 #else
 #include <dlfcn.h>
 #endif
@@ -75,4 +80,31 @@ void *utils_dyn_sym(void *handle, const char *sym_name) {
     }
 #endif
     return entry_point;
+}
+
+void *utils_lookup_global_sym(const char *sym_name) {
+#ifdef _WIN32
+    // The API may live in the executable itself or in one of the DLLs the
+    // simulator loaded, so search every loaded module.
+    HMODULE modules[512];
+    DWORD needed = 0;
+    if (EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules),
+                           &needed)) {
+        DWORD count = static_cast<DWORD>(needed / sizeof(HMODULE));
+        if (count > static_cast<DWORD>(sizeof(modules) / sizeof(HMODULE))) {
+            count = static_cast<DWORD>(sizeof(modules) / sizeof(HMODULE));
+        }
+        for (DWORD i = 0; i < count; i++) {
+            FARPROC sym = GetProcAddress(modules[i], sym_name);
+            if (sym) {
+                return reinterpret_cast<void *>(sym);
+            }
+        }
+    }
+    return nullptr;
+#else
+    // The global scope is exactly what the interface libraries used to be
+    // resolved against when they were linked directly.
+    return dlsym(RTLD_DEFAULT, sym_name);
+#endif
 }
