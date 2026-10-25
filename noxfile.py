@@ -124,6 +124,13 @@ def build_cocotb_for_dev_test(session: nox.Session) -> None:
     env["CFLAGS"] = flags
     env["CXXFLAGS"] = flags
     env["LDFLAGS"] = "--coverage"
+    # These builds feed the coverage and doctest runs, which resolve the
+    # sources through the installed package. An embedded zip would shadow it
+    # with files inside a temp-directory archive that the coverage path
+    # mapping and --doctest-modules cannot follow.
+    env["CMAKE_ARGS"] = (
+        env.get("CMAKE_ARGS", "") + " -DCOCOTB_EMBED_PYTHON=OFF"
+    ).strip()
 
     # Editable installs break C/C++ coverage collection; don't use them.
     # C/C++ coverage collection requires that the object files produced by the

@@ -163,6 +163,74 @@ static int install_builtin_simulator_finder() {
     return 0;
 }
 
+// Put the package zip embedded in this library ahead of site-packages but
+// behind the interpreter's PYTHONPATH entries: an installed cocotb of another
+// version must not satisfy `import cocotb` for a library that carries its own
+// Python layer, while a user-provided checkout still wins.
+static const char *const syspath_inject_snippet =
+    "import os, site, sys\n"
+    "path = cocotb_embed_zip_path\n"
+    "if path not in sys.path:\n"
+    "    index = 0\n"
+    "    try:\n"
+    "        pkgs = set()\n"
+    "        for p in site.getsitepackages():\n"
+    "            pkgs.add(os.path.normcase(os.path.abspath(p)))\n"
+    "        pkgs.add(os.path.normcase(os.path.abspath(site.getusersitepackages())))\n"
+    "        index = len(sys.path)\n"
+    "        for i, entry in enumerate(sys.path):\n"
+    "            if entry and os.path.normcase(os.path.abspath(entry)) in pkgs:\n"
+    "                index = i\n"
+    "                break\n"
+    "    except Exception:\n"
+    "        index = 0\n"
+    "    sys.path.insert(index, path)\n";
+
+// Publish the embedded zip and put it on sys.path. A library built without
+// one, or built with COCOTB_EMBED_PYTHON=never, leaves sys.path untouched.
+// Like a failed AppendInittab, failure to inject here is fatal: a library
+// carrying its own Python layer must not silently run an installed copy.
+static int inject_embedded_zip() {
+    std::string path = pygpi_publish_embedded_zip();
+    if (path.empty()) {
+        return 0;
+    }
+    PyObject *globals = PyDict_New();
+    PyObject *builtins = globals != NULL ? PyEval_GetBuiltins() : NULL;
+    PyObject *path_obj = PyUnicode_DecodeFSDefault(path.c_str());
+    if (globals == NULL || builtins == NULL || path_obj == NULL ||
+        PyDict_SetItemString(globals, "__builtins__", builtins) != 0 ||
+        PyDict_SetItemString(globals, "cocotb_embed_zip_path", path_obj) != 0) {
+        // LCOV_EXCL_START
+        if (PyErr_Occurred() != NULL) {
+            PyErr_Print();
+        }
+        Py_XDECREF(path_obj);
+        Py_XDECREF(globals);
+        PYGPI_LOG_ERROR("Failed to prepare the cocotb sys.path injection");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+    Py_DECREF(path_obj);
+
+    PyObject *code = Py_CompileString(syspath_inject_snippet,
+                                      "<cocotb sys.path>", Py_file_input);
+    PyObject *result =
+        code != NULL ? PyEval_EvalCode(code, globals, globals) : NULL;
+    Py_XDECREF(code);
+    Py_DECREF(globals);
+    if (result == NULL) {
+        // LCOV_EXCL_START
+        PyErr_Print();
+        PYGPI_LOG_ERROR(
+            "Failed to put the embedded cocotb package zip on sys.path");
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+    Py_DECREF(result);
+    return 0;
+}
+
 // Start the embedded Python interpreter. Called directly from
 // gpi_entry_point() (see gpi/GpiCommon.cpp): PyGPI is compiled into the same
 // library, so no export macro and no environment-provided entry list are
@@ -264,6 +332,13 @@ extern "C" int pygpi_initialize(void) {
     // Make the AppendInittab entry findable for `import cocotb.simulator` on
     // every supported Python version (see the comment on the snippet above).
     if (install_builtin_simulator_finder() != 0) {
+        // LCOV_EXCL_START
+        return -1;
+        // LCOV_EXCL_STOP
+    }
+
+    // Make an embedded cocotb importable before anything imports it.
+    if (inject_embedded_zip() != 0) {
         // LCOV_EXCL_START
         return -1;
         // LCOV_EXCL_STOP

@@ -100,6 +100,7 @@ extern "C" PyAPI_FUNC(void) PyMem_RawFree(void *ptr);
     X(PyType_FromSpec)              \
     X(PyType_GetSlot)               \
     X(PyUnicode_AsWideChar)         \
+    X(PyUnicode_DecodeFSDefault)    \
     X(PyUnicode_DecodeLocale)       \
     X(PyUnicode_FromFormat)         \
     X(PyUnicode_FromString)
@@ -230,6 +231,7 @@ bool ensure_loaded();
 #define PyType_FromSpec (pygpi::api.p_PyType_FromSpec)
 #define PyType_GetSlot (pygpi::api.p_PyType_GetSlot)
 #define PyUnicode_AsWideChar (pygpi::api.p_PyUnicode_AsWideChar)
+#define PyUnicode_DecodeFSDefault (pygpi::api.p_PyUnicode_DecodeFSDefault)
 #define PyUnicode_DecodeLocale (pygpi::api.p_PyUnicode_DecodeLocale)
 #define PyUnicode_FromFormat (pygpi::api.p_PyUnicode_FromFormat)
 #define PyUnicode_FromString (pygpi::api.p_PyUnicode_FromString)

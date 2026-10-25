@@ -10,6 +10,8 @@
 // dependency on libpython, see pyapi.hpp).
 #include <gpi.h>
 
+#include <string>
+
 #include "./pyapi.hpp"
 
 #ifdef PYGPI_EXPORTS
@@ -30,6 +32,12 @@ extern int is_python_context;
 
 void pygpi_log(enum gpi_log_level level, const char *pathname,
                const char *funcname, long lineno, const char *fmt, ...);
+
+// Publishes the package zip embedded in this library as a verified file in
+// the temp directory (see embed_zip.cpp) and returns its path. Returns an
+// empty string when the library carries no zip, when COCOTB_EMBED_PYTHON is
+// "never", or when publication failed.
+std::string pygpi_publish_embedded_zip();
 
 #define PYGPI_LOG_(level, ...) \
     pygpi_log(level, __FILE__, __func__, __LINE__, __VA_ARGS__)
